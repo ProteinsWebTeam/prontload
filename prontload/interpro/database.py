@@ -895,8 +895,10 @@ def report_swiss_descriptions(dsn, schema, **kwargs):
     if not isinstance(filepath, str) or not filepath:
         logging.critical("invalid 'output' argument")
         exit(1)
-    elif not os.path.isdir(os.path.dirname(filepath)):
-        os.makedirs(os.path.dirname(filepath))
+
+    dirname = os.path.dirname(os.path.abspath(filepath))
+    if not os.path.dirname(dirname):
+        os.makedirs(dirname)
 
     con = oracledb.connect(dsn)
     cur = con.cursor()
