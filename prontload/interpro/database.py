@@ -342,6 +342,7 @@ def load_proteins(dsn, schema, **kwargs):
         """.format(schema)
     )
     cur.execute('CREATE INDEX I_PROTEIN$DBCODE ON {}.PROTEIN (DBCODE) NOLOGGING'.format(schema))
+    cur.execute('CREATE INDEX I_PROTEIN$NAME ON {}.PROTEIN (NAME) NOLOGGING'.format(schema))
     oracledb.gather_stats(cur, schema, 'PROTEIN', cascade=True)
     oracledb.grant(cur, 'SELECT', schema, 'PROTEIN', 'INTERPRO_SELECT')
     cur.close()
