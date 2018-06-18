@@ -9,7 +9,7 @@ Get the latest version of the code and install requirements (Python 3.4+):
 ```sh
 $ git clone https://github.com/ProteinsWebTeam/pronto-loader.git
 $ cd pronto-loader/
-$ pip install -r requirements.txt
+$ python setup.py install
 ```
 
 ## Configuration
@@ -25,7 +25,7 @@ Create or edit the `config.json` file to set the following settings:
 The only requirement argument is the path the `config.json`.
 
 ```sh
-python pronto-loader.py config.json [OPTIONS]
+pronto-update config.json [OPTIONS]
 ```
 
 Available options are:
