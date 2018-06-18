@@ -57,5 +57,5 @@ Available options are:
 ## Adding a new step
 
 1. Write the step's function, taking three arguments: `dsn`, `schema`, and `**kwargs`.
-2. Edit `prontload/__init__.py`, add the step to `_STEPS` (list).
-3. If the function requires more arguments, edit `pronto-loader.py`, and add those to `kwargs` (dict).
+2. Edit `cli()` in `prontodb/__init__.py`, and add the step to `steps`.
+3. If the function requires more arguments, add those to `kwargs`.
