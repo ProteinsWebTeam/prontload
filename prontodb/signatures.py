@@ -768,7 +768,7 @@ def load_matches_and_predictions(dsn, schema, **kwargs):
 
     comparators = [
         MatchComparator(proteins, comparisons, max_gap)
-        for _ in range(min(1, processes-2))
+        for _ in range(min(1, processes-2))  # minus two processes: parent process + MatchAggregator
     ]
 
     aggregator = MatchAggregator(comparisons, dsn, schema, **kwargs)
