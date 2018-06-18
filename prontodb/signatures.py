@@ -893,7 +893,7 @@ def load_matches_and_predictions(dsn, schema, **kwargs):
                 cur2.executemany(
                     """
                     INSERT /*+APPEND*/ INTO {}.MATCH (PROTEIN_AC, METHOD_AC, MODEL_AC, POS_FROM, POS_TO, STATUS, DBCODE)
-                    VALUES (:1, :2, :3, :4, :5, :6)
+                    VALUES (:1, :2, :3, :4, :5, :6, :7)
                     """.format(schema),
                     matches_all[i:i + chunk_size]
                 )
@@ -939,7 +939,7 @@ def load_matches_and_predictions(dsn, schema, **kwargs):
         cur2.executemany(
             """
             INSERT /*+APPEND*/ INTO {}.MATCH (PROTEIN_AC, METHOD_AC, MODEL_AC, POS_FROM, POS_TO, STATUS, DBCODE)
-            VALUES (:1, :2, :3, :4, :5, :6)
+            VALUES (:1, :2, :3, :4, :5, :6, :7)
             """.format(schema),
             matches_all[i:i + chunk_size]
         )
