@@ -796,7 +796,7 @@ def load_matches_and_predictions(dsn, schema, **kwargs):
         (
             PROTEIN_AC VARCHAR2(15) NOT NULL,
             METHOD_AC VARCHAR2(25) NOT NULL,
-            MODEL_AC VARCHAR2(255) NOT NULL,
+            MODEL_AC VARCHAR2(25) NOT NULL,
             POS_FROM NUMBER(5) NOT NULL,
             POS_TO NUMBER(5) NOT NULL,
             STATUS CHAR(1) NOT NULL,
