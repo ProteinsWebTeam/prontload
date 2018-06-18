@@ -35,6 +35,7 @@ def cli():
         ('matches', signatures.load_matches_and_predictions),
         ('report', signatures.report_swiss_descriptions)
     ]
+    step_names = [step for step, fn in steps]
 
     default_report = 'swissprot_report_{}.tsv'.format(datetime.today().strftime('%Y_%m_%d'))
 
@@ -43,7 +44,7 @@ def cli():
     )
     parser.add_argument('config',
                         help='config JSON file')
-    parser.add_argument('-s', '--steps', metavar='step', nargs='+', choices=steps,
+    parser.add_argument('-s', '--steps', metavar='step', nargs='+', choices=step_names,
                         help='steps to perform (default: all)')
     parser.add_argument('-p', '--threads', default=1, type=int,
                         help='number of threads (\'matches\' step only)')
@@ -72,9 +73,9 @@ def cli():
 
     if to_run:
         # Reorder steps
-        to_run.sort(key=lambda x: step.index(x))
+        to_run.sort(key=lambda x: step_names.index(x))
     else:
-        to_run = [step for step, fn in steps]
+        to_run = step_names
 
     steps = dict(steps)
     for step in to_run:
