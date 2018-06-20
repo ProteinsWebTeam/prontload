@@ -11,7 +11,7 @@ def cli():
     from datetime import datetime
     from tempfile import gettempdir
 
-    from prontodb import extra, goa, proteins, signatures
+    from prontodb import annotations, extra, proteins, signatures
 
     logging.basicConfig(
         level=logging.INFO,
@@ -27,10 +27,10 @@ def cli():
         ('comments', proteins.load_comments),
         ('descriptions', proteins.load_descriptions),
         ('enzymes', proteins.load_enzymes),
-        ('protein2go', goa.load_protein2go),
+        ('protein2go', annotations.load_protein2go),
         ('methods', signatures.load_methods),
         ('taxonomies', extra.load_taxonomies),
-        ('terms', goa.load_terms),
+        ('terms', annotations.load_terms),
         ('proteins', proteins.load_proteins),
         ('matches', signatures.load_matches_and_predictions),
         ('report', signatures.report_swiss_descriptions)
