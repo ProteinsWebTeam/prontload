@@ -986,16 +986,14 @@ def report_swiss_descriptions(dsn, schema, **kwargs):
     if not os.path.dirname(dirname):
         os.makedirs(dirname)
 
+    # Get descriptions for before update (METHOD2SWISS_DE was populated during protein update)
     con = oracledb.connect(dsn)
     cur = con.cursor()
     cur.execute(
         """
-        SELECT DISTINCT EM.ENTRY_AC, D.TEXT
-          FROM {0}.METHOD2PROTEIN MP
-        INNER JOIN {0}.METHOD M ON MP.METHOD_AC = M.METHOD_AC
-        INNER JOIN {0}.DESC_VALUE D ON MP.DESC_ID = D.DESC_ID
+        SELECT DISTINCT EM.ENTRY_AC, M.DESCRIPTION
+        FROM {0}.METHOD2SWISS_DE M 
         INNER JOIN {0}.ENTRY2METHOD EM ON M.METHOD_AC = EM.METHOD_AC
-        WHERE MP.DBCODE = 'S'  
         """.format(schema)
     )
 
@@ -1006,16 +1004,15 @@ def report_swiss_descriptions(dsn, schema, **kwargs):
         else:
             old_entries[acc] = [descr]
 
-    cur.close()
-    con.close()
-
-    con = oracledb.connect(dsn)
-    cur = con.cursor()
+    # Get descriptions for after update
     cur.execute(
         """
-        SELECT DISTINCT EM.ENTRY_AC, M.DESCRIPTION
-        FROM {0}.METHOD2SWISS_DE M 
+        SELECT DISTINCT EM.ENTRY_AC, D.TEXT
+          FROM {0}.METHOD2PROTEIN MP
+        INNER JOIN {0}.METHOD M ON MP.METHOD_AC = M.METHOD_AC
+        INNER JOIN {0}.DESC_VALUE D ON MP.DESC_ID = D.DESC_ID
         INNER JOIN {0}.ENTRY2METHOD EM ON M.METHOD_AC = EM.METHOD_AC
+        WHERE MP.DBCODE = 'S'  
         """.format(schema)
     )
 
@@ -1046,7 +1043,7 @@ def report_swiss_descriptions(dsn, schema, **kwargs):
                 'type': entry_type,
                 'checked': is_checked,
                 'lost': [descr for descr in old_entries[acc] if descr not in new_entry_descrs],
-                'gained': [descr for descr in new_entries[acc] if descr not in new_entry_descrs]
+                'gained': [descr for descr in new_entry_descrs if descr not in old_entries[acc]]
             }
         else:
             # All descriptions lost (as we lost the entry)
