@@ -876,7 +876,7 @@ def load_matches_and_predictions(dsn, schema, **kwargs):
                 logging.info('{:>12} ({:.0f} proteins/sec)'.format(cnt_proteins, cnt_proteins // (time.time() - ts)))
 
         method_ac = row[1]
-        model_ac = row[2]
+        model_ac = row[1] if row[2] is None else row[2]
         pos_start = math.floor(row[3])
         pos_end = math.floor(row[4])
         status = row[5]
