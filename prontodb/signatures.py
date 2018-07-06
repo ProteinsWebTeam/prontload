@@ -761,14 +761,12 @@ def load_matches_and_predictions(dsn, schema, **kwargs):
     chunk_size = kwargs.get('chunk_size', 100000)
     max_size = kwargs.get('max_size', 10000000)
 
-    logging.info('processing InterPro matches')
-
     proteins = Queue(maxsize=100000)
     comparisons = Queue(maxsize=100000)
 
     comparators = [
         MatchComparator(proteins, comparisons, max_gap)
-        for _ in range(min(1, processes-2))  # minus two processes: parent process + MatchAggregator
+        for _ in range(max(1, processes-2))  # minus two processes: parent process + MatchAggregator
     ]
 
     aggregator = MatchAggregator(comparisons, dsn, schema, **kwargs)
@@ -787,6 +785,7 @@ def load_matches_and_predictions(dsn, schema, **kwargs):
 
         * all PANTHER signatures, almost all PRINTS signatures
     """
+    logging.info('dropping / creating table')
     con = oracledb.connect(dsn)
     cur = con.cursor()
     oracledb.drop_table(cur, schema, 'MATCH')
@@ -804,6 +803,8 @@ def load_matches_and_predictions(dsn, schema, **kwargs):
         ) NOLOGGING
         """.format(schema)
     )
+
+    logging.info('processing InterPro matches')
     cur.execute(
         """
         SELECT
