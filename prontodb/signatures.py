@@ -785,7 +785,7 @@ def load_matches_and_predictions(dsn, schema, **kwargs):
 
         * all PANTHER signatures, almost all PRINTS signatures
     """
-    logging.info('dropping / creating table')
+    logging.info('dropping / creating MATCH table')
     con = oracledb.connect(dsn)
     cur = con.cursor()
     oracledb.drop_table(cur, schema, 'MATCH')
