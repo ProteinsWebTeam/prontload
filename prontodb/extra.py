@@ -6,13 +6,15 @@ import logging
 from . import oracledb
 
 
-def drop_all(dsn, schema):
+def drop_all(dsn, schema, forgive_busy=False):
     con = oracledb.connect(dsn)
     cur = con.cursor()
     tables = oracledb.list_tables(cur, schema)
     for table in tables:
-        logging.info('dropping {}'.format(table))
-        oracledb.drop_table(cur, schema, table)
+        if oracledb.drop_table(cur, schema, table, forgive_busy=forgive_busy):
+            logging.info('table {} dropped'.format(table))
+        else:
+            logging.error('table {} could not be dropped'.format(table))
 
     cur.close()
     con.close()
