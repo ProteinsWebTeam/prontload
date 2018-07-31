@@ -11,7 +11,7 @@ def cli():
     from datetime import datetime
     from tempfile import gettempdir
 
-    from prontodb import annotations, extra, proteins, signatures
+    from prontodb import annotations, extra, matches, proteins, signatures
 
     logging.basicConfig(
         level=logging.INFO,
@@ -32,7 +32,7 @@ def cli():
         ('taxonomies', extra.load_taxonomies),
         ('terms', annotations.load_terms),
         ('proteins', proteins.load_proteins),
-        ('matches', signatures.load_matches_and_predictions),
+        ('matches', matches.load_and_predict),
         ('report', signatures.report_swiss_descriptions)
     ]
     step_names = [step for step, fn in steps]
