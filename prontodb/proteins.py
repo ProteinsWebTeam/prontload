@@ -197,7 +197,7 @@ def load_comments(dsn, schema, **kwargs):
 
     cur.close()
     con.close()
-    logging.info('\tcomplete')
+    logging.info('loading UniProt comments: complete')
 
 
 def load_descriptions(dsn, schema, **kwargs):
@@ -289,7 +289,7 @@ def load_descriptions(dsn, schema, **kwargs):
     cur.close()
     con.close()
 
-    logging.info('\tcomplete')
+    logging.info('loading UniProt descriptions: complete')
 
 
 def load_enzymes(dsn, schema, **kwargs):
@@ -334,7 +334,7 @@ def load_enzymes(dsn, schema, **kwargs):
     cur.close()
     con.close()
 
-    logging.info('\tcomplete')
+    logging.info('loading ENZYME annotations: complete')
 
 
 def load_proteins(dsn, schema, **kwargs):
@@ -379,4 +379,4 @@ def load_proteins(dsn, schema, **kwargs):
     cur.close()
     con.close()
 
-    logging.info('\tcomplete')
+    logging.info('loading proteins: complete')

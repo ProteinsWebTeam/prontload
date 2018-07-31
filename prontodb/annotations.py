@@ -53,7 +53,7 @@ def load_terms(dsn, schema, **kwargs):
     cur.close()
     con.close()
 
-    logging.info('\tcomplete')
+    logging.info('loading GO terms: complete')
 
 
 def load_protein2go(dsn, schema, **kwargs):
@@ -105,7 +105,7 @@ def load_protein2go(dsn, schema, **kwargs):
     cur.execute('CREATE INDEX I_PROTEIN2GO$RC ON {}.PROTEIN2GO (REF_DB_CODE) NOLOGGING'.format(schema))
     oracledb.gather_stats(cur, schema, 'PROTEIN2GO', cascade=True)
     oracledb.grant(cur, 'SELECT', schema, 'PROTEIN2GO', 'INTERPRO_SELECT')
-    logging.info('\tcomplete')
+    logging.info('loading protein GO annotations: complete')
 
     logging.info('loading publications')
     oracledb.drop_table(cur, schema, 'PUBLICATION')
@@ -151,4 +151,4 @@ def load_protein2go(dsn, schema, **kwargs):
     cur.close()
     con.close()
 
-    logging.info('\tcomplete')
+    logging.info('loading publications: complete')

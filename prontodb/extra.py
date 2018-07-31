@@ -28,7 +28,7 @@ def create_synonyms(dsn, schema, **kwargs):
         oracledb.create_synonym(cur, 'INTERPRO', schema, obj)
     cur.close()
     con.close()
-    logging.info('\tcomplete')
+    logging.info('creating synonyms: complete')
 
 
 def load_databases(dsn, schema, **kwargs):
@@ -65,7 +65,7 @@ def load_databases(dsn, schema, **kwargs):
     oracledb.grant(cur, 'SELECT', schema, 'CV_DATABASE', 'INTERPRO_SELECT')
     cur.close()
     con.close()
-    logging.info('\tcomplete')
+    logging.info('loading databases: complete')
 
 
 def load_taxonomies(dsn, schema, **kwargs):
@@ -109,7 +109,7 @@ def load_taxonomies(dsn, schema, **kwargs):
     )
     oracledb.gather_stats(cur, schema, 'ETAXI', cascade=True)
     oracledb.grant(cur, 'SELECT', schema, 'ETAXI', 'INTERPRO_SELECT')
-    logging.info('\tcomplete')
+    logging.info('loading taxons: complete')
 
     logging.info('loading lineages')
     cur.execute('SELECT TAX_ID, PARENT_ID, LEFT_NUMBER, RANK FROM {}.ETAXI'.format(schema))
@@ -195,4 +195,4 @@ def load_taxonomies(dsn, schema, **kwargs):
     cur.close()
     con.close()
 
-    logging.info('\tcomplete')
+    logging.info('loading lineages: complete')
