@@ -573,20 +573,22 @@ class MatchAggregator(Process):
         )
 
         # Populating METHOD2PROTEIN_STG by loading files
-        for filepath in files:
+        for i, filepath in enumerate(files):
+            logging.info('populating METHOD2PROTEIN_STG table ({} / {})'.format(i+1, len(files)))
+
             with gzip.open(filepath, 'rt') as fh:
                 proteins = json.load(fh)
 
             os.unlink(filepath)
 
             data = [(m_ac, p_ac, p['code']) for p_ac, p in proteins.items() for m_ac in p['signatures']]
-            for i in range(0, len(data), self.chunk_size):
+            for j in range(0, len(data), self.chunk_size):
                 cur.executemany(
                     """
                     INSERT /*+APPEND*/ INTO {}.METHOD2PROTEIN_STG (METHOD_AC, PROTEIN_AC, CONDENSE)
                     VALUES (:1, :2, :3)
                     """.format(self.schema),
-                    data[i:i + self.chunk_size]
+                    data[j:j + self.chunk_size]
                 )
                 con.commit()
 
