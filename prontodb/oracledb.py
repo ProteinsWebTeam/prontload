@@ -60,11 +60,11 @@ def list_tables(cur, ownname):
         FROM
           dba_tables
         WHERE
-          owner=:1
+          UPPER(owner) = :1
         ORDER BY
           table_name
         """,
-        (ownname,)
+        (ownname.upper(),)
     )
 
     return [row[0] for row in cur]
