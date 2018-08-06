@@ -24,7 +24,7 @@ def create_synonyms(dsn, schema, **kwargs):
     logging.info('creating synonyms')
     con = oracledb.connect(dsn)
     cur = con.cursor()
-    for obj in ('ENTRY', 'ENTRY2METHOD', 'ENTRY2ENTRY', 'ENTRY2COMP'):
+    for obj in ('ENTRY', 'ENTRY2METHOD', 'ENTRY2ENTRY', 'ENTRY2COMP', 'METHOD2SWISS_DE'):
         oracledb.create_synonym(cur, 'INTERPRO', schema, obj)
     cur.close()
     con.close()
