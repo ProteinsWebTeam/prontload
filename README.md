@@ -9,7 +9,7 @@ Get the latest version of the code and install requirements (Python 3.4+):
 ```sh
 $ git clone https://github.com/ProteinsWebTeam/pronto-loader.git
 $ cd pronto-loader/
-$ pip install -r requirements.txt
+$ python setup.py install
 ```
 
 ## Configuration
@@ -25,7 +25,7 @@ Create or edit the `config.json` file to set the following settings:
 The only requirement argument is the path the `config.json`.
 
 ```sh
-python pronto-loader.py config.json [OPTIONS]
+pronto-update config.json [OPTIONS]
 ```
 
 Available options are:
@@ -54,8 +54,8 @@ Available options are:
 | matches       | Copy protein matches from InterPro, and run predictions                        |
 | report        | Export gained/lost protein descriptions per InterPro entries                   |
 
-## Adding a new step
+## Adding a step
 
 1. Write the step's function, taking three arguments: `dsn`, `schema`, and `**kwargs`.
-2. Edit `prontload/__init__.py`, add the step to `_STEPS` (list).
-3. If the function requires more arguments, edit `pronto-loader.py`, and add those to `kwargs` (dict).
+2. Edit `cli()` in `prontodb/__init__.py`, and add the step to `steps`.
+3. If the function requires more arguments, add those to `kwargs`.

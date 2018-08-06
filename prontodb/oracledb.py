@@ -8,7 +8,7 @@ def connect(dsn):
     return cx_Oracle.connect(dsn)
 
 
-def drop_table(cur, ownname, tabname):
+def drop_table(cur, ownname, tabname, forgive_busy=False):
     try:
         cur.execute('DROP TABLE {}.{} CASCADE CONSTRAINTS'.format(ownname, tabname))
     except cx_Oracle.DatabaseError as e:
@@ -23,10 +23,15 @@ def drop_table(cur, ownname, tabname):
         if _error.code == 942:
             # ORA-00942 (table or view does not exist)
             # That's fine since we are going to create the table
-            pass
+            return False
+        elif _error.code == 54 and forgive_busy:
+            # ORA-00054 (resource busy and acquire with NOWAIT specified or timeout expired)
+            return False
         else:
             # Something else: raise the issue
             raise e
+    else:
+        return True
 
 
 def gather_stats(cur, ownname, tabname, cascade=True):
@@ -55,11 +60,11 @@ def list_tables(cur, ownname):
         FROM
           dba_tables
         WHERE
-          owner=:1
+          UPPER(owner) = :1
         ORDER BY
           table_name
         """,
-        (ownname,)
+        (ownname.upper(),)
     )
 
     return [row[0] for row in cur]
