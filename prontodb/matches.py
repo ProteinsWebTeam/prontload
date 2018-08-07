@@ -612,53 +612,6 @@ class MatchAggregator(Process):
             proteins = None
             data = None
 
-        # todo: delete when tested
-        # # Indexing METHOD2PROTEIN_STG (no primary key)
-        # logging.info('indexing/optimizing METHOD2PROTEIN_STG table')
-        # cur.execute(
-        #     """
-        #     CREATE INDEX I_METHOD2PROTEIN_STG$PROTEIN
-        #     ON {}.METHOD2PROTEIN_STG (PROTEIN_AC)
-        #     NOLOGGING
-        #     """.format(self.schema)
-        # )
-        #
-        # # Stats for METHOD2PROTEIN_STG
-        # oracledb.gather_stats(cur, self.schema, 'METHOD2PROTEIN_STG', cascade=True)
-        #
-        # logging.info('creating METHOD2PROTEIN table')
-        # oracledb.drop_table(cur, self.schema, 'METHOD2PROTEIN')
-        # cur.execute(
-        #     """
-        #     CREATE TABLE {}.METHOD2PROTEIN
-        #     (
-        #         METHOD_AC VARCHAR2(25) NOT NULL,
-        #         PROTEIN_AC VARCHAR2(15) NOT NULL,
-        #         DBCODE CHAR(1) NOT NULL,
-        #         CONDENSE VARCHAR(100) NOT NULL,
-        #         LEN NUMBER(5) NOT NULL,
-        #         LEFT_NUMBER NUMBER NOT NULL,
-        #         DESC_ID NUMBER(10) NOT NULL
-        #     ) NOLOGGING
-        #     """.format(self.schema)
-        # )
-        #
-        # # Populating METHOD2PROTEIN (merging METHOD2PROTEIN_STG, PROTEIN, AND ETAXI)
-        # cur.execute(
-        #     """
-        #     INSERT /*+APPEND*/ INTO {0}.METHOD2PROTEIN (METHOD_AC, PROTEIN_AC, DBCODE, CONDENSE, LEN, LEFT_NUMBER, DESC_ID)
-        #     SELECT M2P.METHOD_AC, M2P.PROTEIN_AC, P.DBCODE, M2P.CONDENSE, P.LEN, NVL(E.LEFT_NUMBER, 0), PD.DESC_ID
-        #     FROM {0}.METHOD2PROTEIN_STG M2P
-        #     INNER JOIN {0}.PROTEIN P ON M2P.PROTEIN_AC = P.PROTEIN_AC
-        #     INNER JOIN {0}.ETAXI E ON P.TAX_ID = E.TAX_ID
-        #     INNER JOIN {0}.PROTEIN_DESC PD ON M2P.PROTEIN_AC = PD.PROTEIN_AC
-        #     """.format(self.schema)
-        # )
-        # con.commit()
-        #
-        # # Dropping staging table
-        # oracledb.drop_table(cur, self.schema, 'METHOD2PROTEIN_STG')
-
         # Indexing METHOD2PROTEIN
         logging.info('indexing METHOD2PROTEIN (PK_METHOD2PROTEIN)')
         cur.execute(
