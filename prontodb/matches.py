@@ -584,7 +584,7 @@ class MatchAggregator(Process):
         )
 
         # Populating METHOD2PROTEIN_STG by loading files
-        for i, filepath in enumerate(files):
+        for filepath in files:
             with gzip.open(filepath, 'rt') as fh:
                 proteins = json.load(fh)
 
@@ -596,7 +596,7 @@ class MatchAggregator(Process):
                 for method_ac in p['signatures']
             ]
 
-            for j in range(0, len(data), self.chunk_size):
+            for i in range(0, len(data), self.chunk_size):
                 cur.executemany(
                     """
                     INSERT /*+APPEND*/ INTO {}.METHOD2PROTEIN (
@@ -604,7 +604,7 @@ class MatchAggregator(Process):
                     )
                     VALUES (:1, :2, :3, :4, :5, :6, :7)
                     """.format(self.schema),
-                    data[j:j + self.chunk_size]
+                    data[i:i + self.chunk_size]
                 )
                 con.commit()
 
