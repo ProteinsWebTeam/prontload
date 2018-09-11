@@ -737,7 +737,8 @@ def load_and_predict(dsn, schema, **kwargs):
             POS_FROM NUMBER(5) NOT NULL,
             POS_TO NUMBER(5) NOT NULL,
             STATUS CHAR(1) NOT NULL,
-            DBCODE CHAR(1) NOT NULL
+            DBCODE CHAR(1) NOT NULL,
+            FRAGMENTS VARCHAR2(200) DEFAULT NULL
         ) NOLOGGING
         """.format(schema)
     )
@@ -754,11 +755,26 @@ def load_and_predict(dsn, schema, **kwargs):
               MA.POS_FROM AS POS_FROM,
               MA.POS_TO AS POS_TO,
               MA.STATUS AS STATUS,
+              MA.FRAGMENTS AS FRAGMENTS,
               MA.DBCODE AS M_DBCODE,
               ME.SIG_TYPE AS SIG_TYPE
             FROM INTERPRO.MATCH MA
               INNER JOIN INTERPRO.METHOD ME ON MA.METHOD_AC = ME.METHOD_AC
             UNION ALL
+            SELECT
+              FM.PROTEIN_AC AS PROTEIN_AC,
+              FM.METHOD_AC AS METHOD_AC,
+              FM.METHOD_AC AS MODEL_AC,
+              FM.POS_FROM AS POS_FROM,
+              FM.POS_TO AS POS_TO,
+              'T' AS STATUS,
+              NULL AS FRAGMENTS,
+              FM.DBCODE AS M_DBCODE,
+              ME.SIG_TYPE AS SIG_TYPE
+            FROM INTERPRO.FEATURE_MATCH FM
+              INNER JOIN INTERPRO.METHOD ME ON FM.METHOD_AC = ME.METHOD_AC
+            WHERE FM.DBCODE = 'g'
+            UNION ALL            
             SELECT
               ME.PROTEIN_AC AS PROTEIN_AC,
               ME.CODE AS METHOD_AC,
@@ -766,6 +782,7 @@ def load_and_predict(dsn, schema, **kwargs):
               ME.POS_FROM AS POS_FROM,
               ME.POS_TO AS POS_TO,
               'T' AS STATUS,
+              NULL AS FRAGMENTS,
               'm' AS M_DBCODE,
               NULL AS SIG_TYPE
             FROM INTERPRO.MEROPS ME        
@@ -806,7 +823,8 @@ def load_and_predict(dsn, schema, **kwargs):
 
                 if matches_filtered:
                     proteins.put(
-                        (protein, prot_dbcode, prot_length, prot_descr_id, left_number, matches_filtered)
+                        (protein, prot_dbcode, prot_length,
+                         prot_descr_id, left_number, matches_filtered)
                     )
 
             matches_filtered = []
@@ -823,23 +841,30 @@ def load_and_predict(dsn, schema, **kwargs):
         pos_start = math.floor(row[3])
         pos_end = math.floor(row[4])
         status = row[5]
-        method_dbcode = row[6]
-        method_type = row[7]
-        prot_length = math.floor(row[8])
-        is_fragment = row[9] == 'Y'
-        prot_dbcode = row[10]
-        prot_descr_id = row[11]
-        left_number = row[12]
+        fragments = row[6]
+        method_dbcode = row[7]
+        method_type = row[8]
+        prot_length = math.floor(row[9])
+        is_fragment = row[10] == 'Y'
+        prot_dbcode = row[11]
+        prot_descr_id = row[12]
+        left_number = row[13]
 
-        matches_all.append((protein, method_ac, model_ac, pos_start, pos_end, status, method_dbcode))
+        matches_all.append(
+            (protein, method_ac, model_ac, pos_start, pos_end,
+             status, method_dbcode, fragments)
+        )
 
         if len(matches_all) == max_size:
             cnt_matches += max_size
             for i in range(0, len(matches_all), chunk_size):
                 cur2.executemany(
                     """
-                    INSERT /*+APPEND*/ INTO {}.MATCH (PROTEIN_AC, METHOD_AC, MODEL_AC, POS_FROM, POS_TO, STATUS, DBCODE)
-                    VALUES (:1, :2, :3, :4, :5, :6, :7)
+                    INSERT /*+APPEND*/ INTO {}.MATCH (
+                        PROTEIN_AC, METHOD_AC, MODEL_AC, 
+                        POS_FROM, POS_TO, STATUS, DBCODE, FRAGMENTS
+                    )
+                    VALUES (:1, :2, :3, :4, :5, :6, :7, :8)
                     """.format(schema),
                     matches_all[i:i + chunk_size]
                 )
@@ -878,7 +903,8 @@ def load_and_predict(dsn, schema, **kwargs):
 
     if matches_filtered:
         proteins.put((
-            protein, prot_dbcode, prot_length, prot_descr_id, left_number, matches_filtered
+            protein, prot_dbcode, prot_length,
+            prot_descr_id, left_number, matches_filtered
         ))
     matches_filtered = []
     agg = {}
@@ -886,8 +912,11 @@ def load_and_predict(dsn, schema, **kwargs):
     for i in range(0, len(matches_all), chunk_size):
         cur2.executemany(
             """
-            INSERT /*+APPEND*/ INTO {}.MATCH (PROTEIN_AC, METHOD_AC, MODEL_AC, POS_FROM, POS_TO, STATUS, DBCODE)
-            VALUES (:1, :2, :3, :4, :5, :6, :7)
+            INSERT /*+APPEND*/ INTO {}.MATCH (
+                PROTEIN_AC, METHOD_AC, MODEL_AC, 
+                POS_FROM, POS_TO, STATUS, DBCODE, FRAGMENTS
+            )
+            VALUES (:1, :2, :3, :4, :5, :6, :7, :8)
             """.format(schema),
             matches_all[i:i + chunk_size]
         )
