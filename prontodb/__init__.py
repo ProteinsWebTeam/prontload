@@ -7,18 +7,11 @@ __version__ = "0.4.0"
 def cli():
     import argparse
     import json
-    import logging
     import sys
     from datetime import datetime
     from tempfile import gettempdir
 
     from . import goa, interpro, uniprot
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s: %(message)s",
-        datefmt="%y-%m-%d %H:%M:%S"
-    )
 
     default_report = "swissprot_report_{}.tsv".format(
         datetime.today().strftime("%Y_%m_%d")
@@ -150,7 +143,13 @@ def cli():
 
     for i in to_run:
         step = steps[i]
-        logging.info("running '{}'".format(step["name"]))
+        sys.stderr.write(
+            "{:%y-%m-%d %H:%M:%S}: running '{}'\n".format(
+                datetime.now(), step["name"]
+            )
+        )
         step["func"](*step["args"])
 
-    logging.info("complete")
+    sys.stderr.write(
+        "{:%y-%m-%d %H:%M:%S}: complete\n".format(datetime.now()))
+
