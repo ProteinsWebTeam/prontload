@@ -6,6 +6,7 @@ __version__ = "0.4.0"
 
 def cli():
     import argparse
+    import os
     import json
     import sys
     from datetime import datetime
@@ -27,13 +28,15 @@ def cli():
                         help="steps to perform (default: all)")
     parser.add_argument("-p", "--threads", default=1, type=int,
                         help="number of threads")
-    parser.add_argument("-t", "--temp", default=gettempdir(),
+    parser.add_argument("-t", "--tmpdir", default=gettempdir(),
                         help="temporary directory "
                              "(default: {})".format(gettempdir()))
     parser.add_argument("-o", "--output", default=default_report,
                         help="output SwissProt report for curators "
                              "(default: {})".format(default_report))
     args = parser.parse_args()
+
+    os.makedirs(args.tmpdir, exist_ok=True)
 
     with open(args.config, 'rt') as fh:
         config = json.load(fh)
@@ -88,7 +91,7 @@ def cli():
         {
             "name": "descriptions",
             "func": uniprot.load_descriptions,
-            "args": (dsn, schema, args.temp)
+            "args": (dsn, schema, args.tmpdir)
         },
         {
             "name": "enzymes",
@@ -113,7 +116,7 @@ def cli():
         {
             "name": "matches",
             "func": interpro.load_matches,
-            "args": (dsn, schema, args.threads, max_gap, args.temp)
+            "args": (dsn, schema, args.threads, max_gap, args.tmpdir)
         },
         {
             "name": "copy",
