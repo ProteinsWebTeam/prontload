@@ -3,54 +3,300 @@
 
 import gzip
 import json
-import logging
 import math
 import os
-import tempfile
-import time
 from multiprocessing import Process, Queue
+from tempfile import mkstemp
 
-from . import oracledb
+from .oracledb import Connection
+
+
+def create_synonyms(dsn, src, dst, tables=[]):
+    con = Connection(dsn)
+    for table_name in tables:
+        query = ("CREATE OR REPLACE SYNONYM {0}.{2} "
+                 "FOR {1}.{2}".format(dst, src, table_name))
+        con.execute(query)
+
+
+def load_databases(dsn, schema):
+    con = Connection(dsn)
+    con.drop_table(schema, "CV_DATABASE")
+    con.execute(
+        """
+        CREATE TABLE {}.CV_DATABASE
+        (
+            DBCODE VARCHAR2(10) NOT NULL,
+            DBNAME VARCHAR2(50) NOT NULL,
+            DBSHORT VARCHAR2(10) NOT NULL,
+            VERSION VARCHAR2(20),
+            FILE_DATE DATE,
+            CONSTRAINT PK_DATABASE PRIMARY KEY (DBCODE)
+        ) NOLOGGING
+        """.format(schema)
+    )
+
+    con.execute(
+        """
+        INSERT /*+APPEND*/ INTO {}.CV_DATABASE (DBCODE, DBNAME, DBSHORT, VERSION, FILE_DATE)
+        SELECT DB.DBCODE, DB.DBNAME, DB.DBSHORT, V.VERSION, V.FILE_DATE
+        FROM INTERPRO.CV_DATABASE DB
+        LEFT OUTER JOIN INTERPRO.DB_VERSION V ON DB.DBCODE = V.DBCODE
+        """.format(schema)
+    )
+    con.commit()
+
+    con.optimize_table(schema, "CV_DATABASE", cascade=True)
+    con.grant("SELECT", schema, "CV_DATABASE", "INTERPRO_SELECT")
+
+
+def load_signatures(dsn, schema):
+    con = Connection(dsn)
+    con.drop_table(schema, "METHODS")
+    con.execute(
+        """
+        CREATE TABLE {}.METHOD
+        (
+            METHOD_AC VARCHAR2(25) NOT NULL,
+            NAME VARCHAR2(100),
+            DBCODE CHAR(1) NOT NULL,
+            CANDIDATE CHAR(1) NOT NULL,
+            DESCRIPTION VARCHAR2(220),
+            SIG_TYPE CHAR(1)
+        ) NOLOGGING
+        """.format(schema)
+    )
+
+    con.execute(
+        """
+        INSERT /*+APPEND*/ INTO {}.METHOD (METHOD_AC, NAME, DBCODE, CANDIDATE, DESCRIPTION, SIG_TYPE)
+        SELECT METHOD_AC, NAME, DBCODE, CANDIDATE, DESCRIPTION, SIG_TYPE
+        FROM INTERPRO.METHOD
+        """.format(schema)
+    )
+    con.commit()
+
+    con.execute(
+        """
+        ALTER TABLE {}.METHOD
+        ADD CONSTRAINT PK_METHOD PRIMARY KEY (METHOD_AC)
+        """.format(schema)
+    )
+    con.execute(
+        """
+        CREATE INDEX I_METHOD$DBCODE 
+        ON {}.METHOD (DBCODE) NOLOGGING
+        """.format(schema)
+    )
+
+    con.optimize_table(schema, "METHOD", cascade=True)
+    con.grant("SELECT", schema, "METHOD", "INTERPRO_SELECT")
+
+
+def load_taxa(dsn, schema, chunk_size=100000):
+    con = Connection(dsn)
+    con.drop_table(schema, "ETAXI")
+    con.drop_table(schema, "LINEAGE")
+    con.execute(
+        """
+        CREATE TABLE {}.ETAXI
+        (
+            TAX_ID NUMBER(10) NOT NULL,
+            PARENT_ID NUMBER(10),
+            SCIENTIFIC_NAME VARCHAR2(255) NOT NULL,
+            RANK VARCHAR2(50),
+            LEFT_NUMBER NUMBER,
+            RIGHT_NUMBER NUMBER,
+            FULL_NAME VARCHAR2(513)
+        ) NOLOGGING
+        """.format(schema)
+    )
+
+    con.execute(
+        """
+        CREATE TABLE {}.LINEAGE
+        (
+            LEFT_NUMBER NUMBER NOT NULL,
+            TAX_ID NUMBER(10) NOT NULL,
+            RANK VARCHAR2(50)
+        ) NOLOGGING
+        """.format(schema)
+    )
+
+    con.execute(
+        """
+        INSERT /*+APPEND*/ INTO {}.ETAXI (
+            TAX_ID, PARENT_ID, SCIENTIFIC_NAME, RANK, 
+            LEFT_NUMBER, RIGHT_NUMBER, FULL_NAME
+        )
+        SELECT 
+            TAX_ID, PARENT_ID, SCIENTIFIC_NAME, RANK, 
+            LEFT_NUMBER, RIGHT_NUMBER, FULL_NAME
+        FROM INTERPRO.ETAXI
+        """.format(schema)
+    )
+    con.commit()
+    con.execute(
+        """
+        ALTER TABLE {}.ETAXI
+        ADD CONSTRAINT PK_ETAXI PRIMARY KEY (TAX_ID)
+        """.format(schema)
+    )
+
+    con.optimize_table(schema, "ETAXI", cascade=True)
+    con.grant("SELECT", schema, "ETAXI", "INTERPRO_SELECT")
+
+    taxons = {}
+    query = """
+        SELECT TAX_ID, PARENT_ID, LEFT_NUMBER, RANK
+        FROM {}.ETAXI
+    """.format(schema)
+    for tax_id, parent_id, left_num, rank in con.get(query):
+        if tax_id != 131567:
+            """
+            taxID 131567 (cellular organisms) contains three superkingdoms:
+                * Bacteria (2)
+                * Archaea (2157)
+                * Eukaryota (2759)
+
+            therefore it is not needed (we don't want a meta-superkingdom)
+            """
+            taxons[tax_id] = {
+                "parent": parent_id,
+                "left_num": left_num,
+                "rank": "superkingdom" if parent_id == 1 else rank
+            }
+
+    lineage = []
+    for tax_id in taxons:
+        t = taxons[tax_id]
+        left_num = t["left_num"]
+        if not left_num:
+            continue
+        elif t["rank"] != "no rank":
+            lineage.append((left_num, tax_id, t["rank"]))
+
+        parent_id = t["parent"]
+        while parent_id:
+            if parent_id not in taxons:
+                # taxID 131567 missing from dictionary
+                break
+
+            t = taxons[parent_id]
+            if t["rank"] != "no rank":
+                lineage.append((left_num, parent_id, t["rank"]))
+
+            parent_id = t["parent"]
+
+    for i in range(0, len(lineage), chunk_size):
+        con.executemany(
+            """
+            INSERT /*+APPEND*/ INTO {}.LINEAGE (LEFT_NUMBER, TAX_ID, RANK)
+            VALUES (:1, :2, :3)
+            """.format(schema),
+            lineage[i:i+chunk_size]
+        )
+        con.commit()
+
+    con.execute(
+        """
+        CREATE INDEX I_LINEAGE$L$R
+        ON {}.LINEAGE (LEFT_NUMBER, RANK)
+        NOLOGGING
+        """.format(schema)
+    )
+
+    con.optimize_table(schema, "LINEAGE", cascade=True)
+    con.grant("SELECT", schema, "LINEAGE", "INTERPRO_SELECT")
+
+
+def load_proteins(dsn, schema):
+    con = Connection(dsn)
+    con.drop_table(schema, "PROTEIN")
+    con.execute(
+        """
+        CREATE TABLE {}.PROTEIN
+        (
+            PROTEIN_AC VARCHAR2(15) NOT NULL,
+            NAME VARCHAR2(16) NOT NULL ,
+            DBCODE CHAR(1) NOT NULL,
+            LEN NUMBER(5) NOT NULL,
+            FRAGMENT CHAR(1) NOT NULL,
+            TAX_ID NUMBER(15)
+        ) NOLOGGING
+        """.format(schema)
+    )
+
+    con.execute(
+        """
+        INSERT /*+APPEND*/ INTO {}.PROTEIN (
+            PROTEIN_AC, NAME, DBCODE, LEN, FRAGMENT, TAX_ID
+        )
+        SELECT 
+            PROTEIN_AC, NAME, DBCODE, LEN, FRAGMENT, TAX_ID
+        FROM INTERPRO.PROTEIN
+        """.format(schema)
+    )
+    con.commit()
+
+    con.execute(
+        """
+        ALTER TABLE {}.PROTEIN
+        ADD CONSTRAINT PK_PROTEIN PRIMARY KEY (PROTEIN_AC)
+        """.format(schema)
+    )
+    con.execute(
+        """
+        CREATE INDEX I_PROTEIN$DBCODE 
+        ON {}.PROTEIN (DBCODE) NOLOGGING
+        """.format(schema)
+    )
+    con.execute(
+        """
+        CREATE INDEX I_PROTEIN$NAME 
+        ON {}.PROTEIN (NAME) NOLOGGING
+        """.format(schema)
+    )
+
+    con.optimize_table(schema, "PROTEIN", cascade=True)
+    con.grant("SELECT", schema, "PROTEIN", "INTERPRO_SELECT")
 
 
 class MatchComparator(Process):
-    def __init__(self, task_queue, result_queue, max_gap):
+    def __init__(self, tasks, results, max_gap):
         super().__init__()
-        self.tasks = task_queue
-        self.results = result_queue
+        self.tasks = tasks
+        self.results = results
         self.max_gap = max_gap
 
     def run(self):
         while True:
             task = self.tasks.get()
-
             if task is None:
                 break
 
-            accession, dbcode, length, descr_id, left_number, matches = task
+            acc, dbcode, length, descr_id, left_num, matches = task
             structure = self.condense(matches, self.max_gap)
             signatures, comparisons = self.compare(matches)
             self.results.put((
-                accession, dbcode, length, descr_id, left_number, structure, signatures, comparisons
+                acc, dbcode, length, descr_id, left_num,
+                structure, signatures, comparisons
             ))
 
     @staticmethod
     def compare(matches):
         comparisons = []
         signatures = {}
-        for m1 in matches:
-            acc_1 = m1[0]
-            len_1 = m1[2] - m1[1] + 1
+        for m1_acc, m1_start, m1_end in matches:
+            m1_len = m1_end - m1_start + 1
 
-            if acc_1 in signatures:
-                signatures[acc_1] += 1
+            if m1_acc in signatures:
+                signatures[m1_acc] += 1
             else:
-                signatures[acc_1] = 1
+                signatures[m1_acc] = 1
 
-            for m2 in matches:
-                acc_2 = m2[0]
-                len_2 = m2[2] - m2[1] + 1
-
+            for m2_acc, m2_start, m2_end in matches:
+                m2_len = m2_end - m2_start + 1
                 """
                 1           13      end position *is* included
                 -------------       match 1 (13 - 1 + 1 = 13 aa)
@@ -60,16 +306,17 @@ class MatchComparator(Process):
                                     frac 1 = 5 / 13 = 0.38...
                                     frac 2 = 5 / 8 = 0.625
                 """
-
-                if acc_1 <= acc_2:
-                    comparisons.append((acc_1, len_1, acc_2, len_2, MatchComparator.calc_overlap(m1, m2)))
+                if m1_acc <= m2_acc:
+                    comparisons.append((
+                        m1_acc,
+                        m1_len,
+                        m2_acc,
+                        m2_len,
+                        # overlap length
+                        min(m1_end, m2_end) - max(m1_start, m2_start) + 1
+                    ))
 
         return list(signatures.items()), comparisons
-
-    @staticmethod
-    def calc_overlap(m1, m2):
-        # m1 and m2 are tuples (method_ac, start, end)
-        return min(m1[2], m2[2]) - max(m1[1], m2[1]) + 1
 
     @staticmethod
     def condense(matches, max_gap):
@@ -81,7 +328,8 @@ class MatchComparator(Process):
             locations.append((pos_end, method_ac))
 
         """
-        Evaluate the protein's match structure, i.e. how signatures match the proteins
+        Evaluate the protein's match structure, 
+            i.e. how signatures match the proteins
 
         -----------------------------   Protein
          <    >                         Signature 1
@@ -93,7 +341,8 @@ class MatchComparator(Process):
          < <  > >     < >
          1 2  1 2     3 3
 
-        Structure, with '-' representing a "gap" (more than N bp between two positions):
+        Structure, with '-' representing a "gap" 
+            (more than N bp between two positions):
         1212-33
         """
 
@@ -103,8 +352,10 @@ class MatchComparator(Process):
         """
         Do not set the offset to 0, but to the first position:
         if two proteins have the same structure,
-        but the first position of one protein is > max_gap while the first position of the other protein is <= max_gap,
-        a gap will be used for the first protein and not for the other, which will results in two different structures
+        but the first position of one protein is > max_gap 
+        while the first position of the other protein is <= max_gap,
+        a gap will be used for the first protein and not for the other, 
+        which will results in two different structures
         """
         offset = locations[0][0]
 
@@ -129,17 +380,13 @@ class MatchComparator(Process):
 
 
 class MatchAggregator(Process):
-    def __init__(self, task_queue, dsn, schema, **kwargs):
+    def __init__(self, dsn, schema, tasks, tmpdir=None, chunk_size=100000):
         super().__init__()
-        self.tasks = task_queue
         self.dsn = dsn
         self.schema = schema
-        self.tmpdir = kwargs.get('tmpdir', tempfile.gettempdir())
-        self.chunk_size = kwargs.get('chunk_size', 100000)
-        self.max_size = kwargs.get('max_size', 1000000)
-
-        if self.tmpdir and not os.path.isdir(self.tmpdir):
-            os.makedirs(self.tmpdir)
+        self.tasks = tasks
+        self.tmpdir = tmpdir
+        self.chunk_size = chunk_size
 
     def run(self):
         structures = {}
@@ -149,46 +396,46 @@ class MatchAggregator(Process):
         files = []
 
         while True:
-            # Get processed proteins
             task = self.tasks.get()
-
             if task is None:
                 break
 
-            accession, dbcode, length, descr_id, left_number, struct, _signatures, _comparisons = task
+            (accession, dbcode, length, descr_id, left_num,
+             _structure, _signatures, _comparisons) = task
 
             # struct: condensed match structure of the protein
-            if struct in structures:
-                code = structures[struct]
+            if _structure in structures:
+                code = structures[_structure]
             else:
-                code = structures[struct] = self.base36encode(len(structures) + 1)
+                code = self.base36encode(len(structures) + 1)
+                structures[_structure] = code
 
             p = {
-                'acc': accession,
-                'dbcode': dbcode,
-                'length': length,
-                'descr': descr_id,
-                'leftnum': left_number,
-                'code': code,
-                'signatures': []
+                "acc": accession,
+                "dbcode": dbcode,
+                "length": length,
+                "descr": descr_id,
+                "leftnum": left_num,
+                "code": code,
+                "signatures": []
             }
             proteins.append(p)
 
             # _signatures: number of times each signature matched the protein
             for acc, n_matches in _signatures:
-                p['signatures'].append(acc)
+                p["signatures"].append(acc)
 
                 if acc not in signatures:
                     signatures[acc] = {
-                        'proteins': 0,
-                        'matches': 0
+                        "proteins": 0,
+                        "matches": 0
                     }
 
                 signatures[acc]['proteins'] += 1
                 signatures[acc]['matches'] += n_matches
 
-            if len(proteins) == self.max_size:
-                files.append(self.dump(proteins))
+            if len(proteins) == self.chunk_size:
+                files.append(self.dump(proteins, self.tmpdir))
                 proteins = []
 
             # _comparisons: match overlaps between signatures
@@ -224,8 +471,12 @@ class MatchAggregator(Process):
                     collocations.add(acc)
                     comp['prot'] += 1
 
-                if self.is_significant(overlap, len_1, len_2):
-                    # signatures are overlapping
+                if overlap > (min(len_1, len_2) / 2):
+                    """
+                    Consider that matches significantly overlap 
+                    if the overlap is longer 
+                    than the half of the shortest match
+                    """
                     comp['frac_1'] += overlap / len_1
                     comp['frac_2'] += overlap / len_2
                     comp['over'] += 1
@@ -241,22 +492,15 @@ class MatchAggregator(Process):
             files.append(self.dump(proteins))
             proteins = []
 
-        logging.info('making predictions')
-
-        # Get candidate signatures from DB (and non-PROSITE Pattern candidates)
-        con = oracledb.connect(self.dsn)
-        cur = con.cursor()
-        cur.execute(
-            """
-            SELECT METHOD_AC, DBCODE
-            FROM {}.METHOD
-            WHERE CANDIDATE = 'Y'
-            """.format(self.schema)
-        )
-
+        con = Connection(self.dsn)
         candidates = set()
         non_prosite_candidates = set()
-        for accession, dbcode in cur:
+        query = """
+            SELECT METHOD_AC, DBCODE
+            FROM INTERPRO.METHOD
+            WHERE CANDIDATE = 'Y'
+        """
+        for accession, dbcode in con.get(query):
             candidates.add(accession)
             if dbcode != 'P':
                 non_prosite_candidates.add(accession)
@@ -414,10 +658,9 @@ class MatchAggregator(Process):
                         prediction = 'CONTAINED_BY'
                     predictions.append((acc_2, acc_1, prediction))
 
-        # Inserting predictions and signature stats
-        logging.info('creating METHOD_MATCH table')
-        oracledb.drop_table(cur, self.schema, 'METHOD_MATCH')
-        cur.execute(
+        # Populating METHOD_MATCH
+        con.drop_table(self.schema, "METHOD_MATCH")
+        con.execute(
             """
             CREATE TABLE {}.METHOD_MATCH
             (
@@ -428,10 +671,9 @@ class MatchAggregator(Process):
             """.format(self.schema)
         )
 
-        # Populating METHOD_MATCH
         signatures = [(acc, s['matches'], s['proteins']) for acc, s in signatures.items()]
         for i in range(0, len(signatures), self.chunk_size):
-            cur.executemany(
+            con.executemany(
                 """
                 INSERT /*+APPEND*/ INTO {}.METHOD_MATCH (METHOD_AC, N_MATCHES, N_PROT)
                 VALUES (:1, :2, :3)
@@ -440,23 +682,19 @@ class MatchAggregator(Process):
             )
             con.commit()
 
-        # Primary key for METHOD_MATCH
-        cur.execute(
+        # Optimizing METHOD_MATCH
+        con.execute(
             """
             ALTER TABLE {}.METHOD_MATCH
             ADD CONSTRAINT PK_METHOD_MATCH PRIMARY KEY (METHOD_AC)
             """.format(self.schema)
         )
+        con.optimize_table(self.schema, "METHOD_MATCH", cascade=True)
+        con.grant("SELECT", self.schema, "METHOD_MATCH", "INTERPRO_SELECT")
 
-        # Stats for METHOD_MATCH
-        oracledb.gather_stats(cur, self.schema, 'METHOD_MATCH', cascade=True)
-
-        # Privileges
-        oracledb.grant(cur, 'SELECT', self.schema, 'METHOD_MATCH', 'INTERPRO_SELECT')
-
-        logging.info('creating METHOD_OVERLAP table')
-        oracledb.drop_table(cur, self.schema, 'METHOD_OVERLAP')
-        cur.execute(
+        # Creating METHOD_OVERLAP
+        con.drop_table(self.schema, "METHOD_OVERLAP")
+        con.execute(
             """
             CREATE TABLE {}.METHOD_OVERLAP
             (
@@ -503,10 +741,11 @@ class MatchAggregator(Process):
 
         # Populating METHOD_OVERLAP
         for i in range(0, len(overlaps), self.chunk_size):
-            cur.executemany(
+            con.executemany(
                 """
                 INSERT /*+APPEND*/ INTO {}.METHOD_OVERLAP (
-                    METHOD_AC1, METHOD_AC2, N_PROT, N_OVER, N_PROT_OVER, AVG_OVER, AVG_FRAC1, AVG_FRAC2
+                    METHOD_AC1, METHOD_AC2, N_PROT, N_OVER, 
+                    N_PROT_OVER, AVG_OVER, AVG_FRAC1, AVG_FRAC2
                 )
                 VALUES (:1, :2, :3, :4, :5, :6, :7, :8)
                 """.format(self.schema),
@@ -514,23 +753,20 @@ class MatchAggregator(Process):
             )
             con.commit()
 
-        # Primary key for METHOD_OVERLAP
-        cur.execute(
+        # Optimizing METHOD_OVERLAP
+        con.execute(
             """
             ALTER TABLE {}.METHOD_OVERLAP
-            ADD CONSTRAINT PK_METHOD_OVERLAP PRIMARY KEY (METHOD_AC1, METHOD_AC2)
+            ADD CONSTRAINT PK_METHOD_OVERLAP 
+            PRIMARY KEY (METHOD_AC1, METHOD_AC2)
             """.format(self.schema)
         )
+        con.optimize_table(self.schema, "METHOD_OVERLAP", cascade=True)
+        con.grant("SELECT", self.schema, "METHOD_OVERLAP", "INTERPRO_SELECT")
 
-        # Stats for METHOD_OVERLAP
-        oracledb.gather_stats(cur, self.schema, 'METHOD_OVERLAP', cascade=True)
-
-        # Privileges
-        oracledb.grant(cur, 'SELECT', self.schema, 'METHOD_OVERLAP', 'INTERPRO_SELECT')
-
-        logging.info('creating METHOD_PREDICTION table')
-        oracledb.drop_table(cur, self.schema, 'METHOD_PREDICTION')
-        cur.execute(
+        # Creating METHOD_PREDICTION
+        con.drop_table(self.schema, "METHOD_PREDICTION")
+        con.execute(
             """
             CREATE TABLE {}.METHOD_PREDICTION
             (
@@ -543,32 +779,30 @@ class MatchAggregator(Process):
 
         # Populating METHOD_PREDICTION
         for i in range(0, len(predictions), self.chunk_size):
-            cur.executemany(
+            con.executemany(
                 """
-                INSERT /*+APPEND*/ INTO {}.METHOD_PREDICTION (METHOD_AC1, METHOD_AC2, RELATION)
+                INSERT /*+APPEND*/ 
+                INTO {}.METHOD_PREDICTION (METHOD_AC1, METHOD_AC2, RELATION)
                 VALUES (:1, :2, :3)
                 """.format(self.schema),
                 predictions[i:i + self.chunk_size]
             )
             con.commit()
 
-        # Primary key for METHOD_PREDICTION
-        cur.execute(
+        # Optimizing METHOD_PREDICTION
+        con.execute(
             """
             ALTER TABLE {}.METHOD_PREDICTION
-            ADD CONSTRAINT PK_METHOD_PREDICTION PRIMARY KEY (METHOD_AC1, METHOD_AC2)
+            ADD CONSTRAINT PK_METHOD_PREDICTION 
+            PRIMARY KEY (METHOD_AC1, METHOD_AC2)
             """.format(self.schema)
         )
+        con.optimize_table(self.schema, "METHOD_PREDICTION", cascade=True)
+        con.grant("SELECT", self.schema, "METHOD_PREDICTION", "INTERPRO_SELECT")
 
-        # Stats for METHOD_PREDICTION
-        oracledb.gather_stats(cur, self.schema, 'METHOD_PREDICTION', cascade=True)
-
-        # Privileges
-        oracledb.grant(cur, 'SELECT', self.schema, 'METHOD_PREDICTION', 'INTERPRO_SELECT')
-
-        logging.info('creating METHOD2PROTEIN table')
-        oracledb.drop_table(cur, self.schema, 'METHOD2PROTEIN')
-        cur.execute(
+        # Creating METHOD2PROTEIN
+        con.drop_table(self.schema, "METHOD2PROTEIN")
+        con.execute(
             """
             CREATE TABLE {}.METHOD2PROTEIN
             (
@@ -591,16 +825,18 @@ class MatchAggregator(Process):
             os.unlink(filepath)
 
             data = [
-                (method_ac, p['acc'], p['dbcode'], p['code'], p['length'], p['leftnum'], p['descr'])
+                (method_ac, p['acc'], p['dbcode'], p['code'],
+                 p['length'], p['leftnum'], p['descr'])
                 for p in proteins
                 for method_ac in p['signatures']
             ]
 
             for i in range(0, len(data), self.chunk_size):
-                cur.executemany(
+                con.executemany(
                     """
                     INSERT /*+APPEND*/ INTO {}.METHOD2PROTEIN (
-                        METHOD_AC, PROTEIN_AC, DBCODE, CONDENSE, LEN, LEFT_NUMBER, DESC_ID
+                        METHOD_AC, PROTEIN_AC, DBCODE, 
+                        CONDENSE, LEN, LEFT_NUMBER, DESC_ID
                     )
                     VALUES (:1, :2, :3, :4, :5, :6, :7)
                     """.format(self.schema),
@@ -612,44 +848,36 @@ class MatchAggregator(Process):
             proteins = None
             data = None
 
-        # Indexing METHOD2PROTEIN
-        logging.info('indexing METHOD2PROTEIN (PK_METHOD2PROTEIN)')
-        cur.execute(
+        # Optimizing METHOD2PROTEIN_STG
+        con.execute(
             """
             ALTER TABLE {}.METHOD2PROTEIN
-            ADD CONSTRAINT PK_METHOD2PROTEIN PRIMARY KEY (METHOD_AC, PROTEIN_AC)
+            ADD CONSTRAINT PK_METHOD2PROTEIN 
+            PRIMARY KEY (METHOD_AC, PROTEIN_AC)
             """.format(self.schema)
         )
-
-        logging.info('indexing METHOD2PROTEIN (I_METHOD2PROTEIN$M)')
-        cur.execute(
+        con.execute(
             """
             CREATE INDEX I_METHOD2PROTEIN$M
             ON {}.METHOD2PROTEIN (METHOD_AC)
             NOLOGGING
             """.format(self.schema)
         )
-
-        logging.info('indexing METHOD2PROTEIN (I_METHOD2PROTEIN$P)')
-        cur.execute(
+        con.execute(
             """
             CREATE INDEX I_METHOD2PROTEIN$P
             ON {}.METHOD2PROTEIN (PROTEIN_AC)
             NOLOGGING
             """.format(self.schema)
         )
-
-        logging.info('indexing METHOD2PROTEIN (I_METHOD2PROTEIN$LN)')
-        cur.execute(
+        con.execute(
             """
             CREATE INDEX I_METHOD2PROTEIN$LN
             ON {}.METHOD2PROTEIN (LEFT_NUMBER)
             NOLOGGING
             """.format(self.schema)
         )
-
-        logging.info('indexing METHOD2PROTEIN (I_METHOD2PROTEIN$M$DB)')
-        cur.execute(
+        con.execute(
             """
             CREATE INDEX I_METHOD2PROTEIN$M$DB
             ON {}.METHOD2PROTEIN (METHOD_AC, DBCODE)
@@ -657,18 +885,23 @@ class MatchAggregator(Process):
             """.format(self.schema)
         )
 
-        # Stats for METHOD2PROTEIN
-        logging.info('optimizing METHOD2PROTEIN')
-        oracledb.gather_stats(cur, self.schema, 'METHOD2PROTEIN', cascade=True)
+        con.optimize_table(self.schema, "METHOD2PROTEIN", cascade=True)
+        con.grant("SELECT", self.schema, "METHOD2PROTEIN", "INTERPRO_SELECT")
 
-        # Privileges
-        oracledb.grant(cur, 'SELECT', self.schema, 'METHOD2PROTEIN', 'INTERPRO_SELECT')
+    @staticmethod
+    def base36encode(num):
+        chars = "0123456789abcdefghijklmnopqrstuvwxyz"
+        encoded = ""
 
-        cur.close()
-        con.close()
+        while num > 0:
+            num, remainder = divmod(num, 36)
+            encoded = chars[remainder] + encoded
 
-    def dump(self, proteins):
-        fd, filepath = tempfile.mkstemp(suffix='.json.gz', dir=self.tmpdir)
+        return encoded
+
+    @staticmethod
+    def dump(proteins, tmpdir=None):
+        fd, filepath = mkstemp(suffix='.json.gz', dir=tmpdir)
         os.close(fd)
 
         with gzip.open(filepath, 'wt') as fh:
@@ -676,58 +909,27 @@ class MatchAggregator(Process):
 
         return filepath
 
-    @staticmethod
-    def base36encode(integer):
-        chars = '0123456789abcdefghijklmnopqrstuvwxyz'
-        encoded = ''
 
-        while integer > 0:
-            integer, remainder = divmod(integer, 36)
-            encoded = chars[remainder] + encoded
+def load_matches(dsn, schema, threads=1, max_gap=20, tmpdir=None, chunk_size=100000):
+    q_proteins = Queue(maxsize=chunk_size)
+    q_matches = Queue(maxsize=chunk_size)
 
-        return encoded
-
-    @staticmethod
-    def is_significant(o, l1, l2):
-        # Consider that matches significantly overlap if the overlap is longer than the half of the shortest match
-        return o > (min(l1, l2) / 2)
-
-
-def load_and_predict(dsn, schema, **kwargs):
-    max_gap = kwargs.get('max_gap', 20)
-    processes = kwargs.get('processes', 3)
-    chunk_size = kwargs.get('chunk_size', 100000)
-    max_size = kwargs.get('max_size', 10000000)
-
-    proteins = Queue(maxsize=100000)
-    comparisons = Queue(maxsize=100000)
-
+    # -2: main thread, aggregator
     comparators = [
-        MatchComparator(proteins, comparisons, max_gap)
-        for _ in range(max(1, processes-2))  # minus two processes: parent process + MatchAggregator
+        MatchComparator(q_proteins, q_matches, max_gap)
+        for _ in range(max(1, threads-3))
     ]
 
-    aggregator = MatchAggregator(comparisons, dsn, schema, **kwargs)
+    aggregator = MatchAggregator(dsn, schema, q_matches,
+                                 tmpdir=tmpdir, chunk_size=chunk_size)
 
     for p in comparators:
         p.start()
 
     aggregator.start()
 
-    """
-    MobiDB-lite: keep matches for MATCH table, but not for predictions
-
-    PANTHER & PRINTS:
-        Merge protein matches.
-        If the signature is a family*, use the entire protein.
-
-        * all PANTHER signatures, almost all PRINTS signatures
-    """
-    logging.info('dropping / creating MATCH table')
-    con = oracledb.connect(dsn)
-    cur = con.cursor()
-    oracledb.drop_table(cur, schema, 'MATCH')
-    cur.execute(
+    con = Connection(dsn)
+    con.execute(
         """
         CREATE TABLE {}.MATCH
         (
@@ -736,16 +938,13 @@ def load_and_predict(dsn, schema, **kwargs):
             MODEL_AC VARCHAR2(25) NOT NULL,
             POS_FROM NUMBER(5) NOT NULL,
             POS_TO NUMBER(5) NOT NULL,
-            STATUS CHAR(1) NOT NULL,
             DBCODE CHAR(1) NOT NULL,
             FRAGMENTS VARCHAR2(200) DEFAULT NULL
         ) NOLOGGING
         """.format(schema)
     )
-
-    logging.info('processing InterPro matches')
-    cur.execute(
-        """
+    
+    query = """
         SELECT M.*, P.LEN, P.FRAGMENT, P.DBCODE, PD.DESC_ID, NVL(E.LEFT_NUMBER, 0)
         FROM (
             SELECT
@@ -754,7 +953,6 @@ def load_and_predict(dsn, schema, **kwargs):
               MA.MODEL_AC AS MODEL_AC,
               MA.POS_FROM AS POS_FROM,
               MA.POS_TO AS POS_TO,
-              MA.STATUS AS STATUS,
               MA.FRAGMENTS AS FRAGMENTS,
               MA.DBCODE AS M_DBCODE,
               ME.SIG_TYPE AS SIG_TYPE
@@ -767,7 +965,6 @@ def load_and_predict(dsn, schema, **kwargs):
               FM.METHOD_AC AS MODEL_AC,
               FM.POS_FROM AS POS_FROM,
               FM.POS_TO AS POS_TO,
-              'T' AS STATUS,
               NULL AS FRAGMENTS,
               FM.DBCODE AS M_DBCODE,
               ME.SIG_TYPE AS SIG_TYPE
@@ -781,7 +978,6 @@ def load_and_predict(dsn, schema, **kwargs):
               ME.CODE AS MODEL_AC,
               ME.POS_FROM AS POS_FROM,
               ME.POS_TO AS POS_TO,
-              'T' AS STATUS,
               NULL AS FRAGMENTS,
               'm' AS M_DBCODE,
               NULL AS SIG_TYPE
@@ -792,161 +988,162 @@ def load_and_predict(dsn, schema, **kwargs):
         INNER JOIN {}.PROTEIN_DESC PD ON M.PROTEIN_AC = PD.PROTEIN_AC
         ORDER BY M.PROTEIN_AC
         """.format(schema)
-    )
 
-    cur2 = con.cursor()     # second cursor for INSERT statements
-    matches_all = []        # matches to be inserted in the MATCH table
-    matches_filtered = []   # matches to be used for protein match structure and predictions
-    agg = {}
-    cnt_proteins = 0
-    cnt_matches = 0
-    protein = None
-    ts = time.time()
-    for row in cur:
-        protein_ac = row[0]
+    matches = []          # matches to be inserted in the MATCH table
+    matches_predict = []  # matches to be used for protein match structure and predictions
+    methods = {}          # methods having matches to merge
+    protein = None      # previous protein accession
+    prot_dbcode = None  # protein DB code (S: SwissProt, T: TrEMBL)
+    length = None       # Sequence length
+    descr_id = None     # Description ID
+    left_num = None     # Taxon left number
+    for row in con.get(query):
+        protein_acc = row[0]
 
-        if protein_ac != protein:
-            # New protein! Flush previous protein
+        if protein_acc != protein:
             if protein is not None:
-                for method_ac in agg:
+                for method_acc in methods:
                     # Merge matches
                     min_pos = None
                     max_pos = None
 
-                    for pos_start, pos_end in agg[method_ac]:
-                        if min_pos is None or pos_start < min_pos:
-                            min_pos = pos_start
-                        if max_pos is None or pos_end > max_pos:
-                            max_pos = pos_end
+                    for start, end in methods[method_acc]:
+                        if min_pos is None or start < min_pos:
+                            min_pos = start
+                        if max_pos is None or end > max_pos:
+                            max_pos = end
 
-                    matches_filtered.append((method_ac, min_pos, max_pos))
+                    matches_predict.append((method_acc, min_pos, max_pos))
 
-                if matches_filtered:
-                    proteins.put(
-                        (protein, prot_dbcode, prot_length,
-                         prot_descr_id, left_number, matches_filtered)
-                    )
+                if matches_predict:
+                    q_proteins.put((protein, prot_dbcode, length, descr_id,
+                                    left_num, matches_predict))
 
-            matches_filtered = []
-            agg = {}
-            protein = protein_ac
-            cnt_proteins += 1
-            if not cnt_proteins % 1000000:
-                logging.info('{:>12} ({:.0f} proteins/sec)'.format(
-                    cnt_proteins, cnt_proteins // (time.time() - ts))
+            matches_predict = []
+            methods = {}
+            protein = protein_acc
+
+        method_acc = row[1]
+        model_acc = row[1] if row[2] is None else row[2]
+        start = math.floor(row[3])
+        end = math.floor(row[4])
+        fragments = row[5]
+        method_dbcode = row[6]
+        method_type = row[7]
+        length = math.floor(row[8])
+        is_fragment = row[9] == 'Y'
+        prot_dbcode = row[10]
+        descr_id = row[11]
+        left_num = row[12]
+
+        matches.append((
+            protein, method_acc, model_acc, start, end,
+            method_dbcode, fragments
+        ))
+        if len(matches) == chunk_size:
+            con.executemany(
+                """
+                INSERT /*+APPEND*/ INTO {}.MATCH (
+                    PROTEIN_AC, METHOD_AC, MODEL_AC, 
+                    POS_FROM, POS_TO, DBCODE, FRAGMENTS
                 )
+                VALUES (:1, :2, :3, :4, :5, :6, :7)
+                """.format(schema),
+                matches
+            )
+            con.commit()
+            matches = []
 
-        method_ac = row[1]
-        model_ac = row[1] if row[2] is None else row[2]
-        pos_start = math.floor(row[3])
-        pos_end = math.floor(row[4])
-        status = row[5]
-        fragments = row[6]
-        method_dbcode = row[7]
-        method_type = row[8]
-        prot_length = math.floor(row[9])
-        is_fragment = row[10] == 'Y'
-        prot_dbcode = row[11]
-        prot_descr_id = row[12]
-        left_number = row[13]
+        """
+        MobiDB-lite: keep matches for MATCH table, but not for predictions
 
-        matches_all.append(
-            (protein, method_ac, model_ac, pos_start, pos_end,
-             status, method_dbcode, fragments)
-        )
+        PANTHER & PRINTS:
+            Merge protein matches.
+            If the signature is a family*, use the entire protein.
 
-        if len(matches_all) == max_size:
-            cnt_matches += max_size
-            for i in range(0, len(matches_all), chunk_size):
-                cur2.executemany(
-                    """
-                    INSERT /*+APPEND*/ INTO {}.MATCH (
-                        PROTEIN_AC, METHOD_AC, MODEL_AC, 
-                        POS_FROM, POS_TO, STATUS, DBCODE, FRAGMENTS
-                    )
-                    VALUES (:1, :2, :3, :4, :5, :6, :7, :8)
-                    """.format(schema),
-                    matches_all[i:i + chunk_size]
-                )
-                con.commit()
-            matches_all = []
-
-        if status != 'T' or is_fragment or method_dbcode == 'g':
+            * all PANTHER signatures, almost all PRINTS signatures
+        """
+        if is_fragment or method_dbcode == 'g':
             continue
         elif method_dbcode not in ('F', 'V'):
-            matches_filtered.append((method_ac, pos_start, pos_end))
-        elif method_ac not in agg:
+            matches_predict.append((method_acc, start, end))
+        elif method_acc not in methods:
             if method_type == 'F':
                 # Families: use the entire protein sequence
-                agg[method_ac] = [(1, prot_length)]
+                methods[method_acc] = [(1, length)]
             else:
-                agg[method_ac] = [(pos_start, pos_end)]
+                methods[method_acc] = [(start, end)]
         elif method_type != 'F':
-            # Since families use the entire protein, we can skip their matches
-            agg[method_ac].append((pos_start, pos_end))
-
-    cur.close()  # close the SELECT cursor as we don't need it anymore
+            # Since families use the entire protein, skip their matches
+            methods[method_acc].append((start, end))
 
     # Flush last protein
-    for method_ac in agg:
+    for method_acc in methods:
         # Merge matches
         min_pos = None
         max_pos = None
 
-        for pos_start, pos_end in agg[method_ac]:
-            if min_pos is None or pos_start < min_pos:
-                min_pos = pos_start
-            if max_pos is None or pos_end > max_pos:
-                max_pos = pos_end
+        for start, end in methods[method_acc]:
+            if min_pos is None or start < min_pos:
+                min_pos = start
+            if max_pos is None or end > max_pos:
+                max_pos = end
 
-        matches_filtered.append((method_ac, min_pos, max_pos))
+        matches_predict.append((method_acc, min_pos, max_pos))
 
-    if matches_filtered:
-        proteins.put((
-            protein, prot_dbcode, prot_length,
-            prot_descr_id, left_number, matches_filtered
-        ))
-    matches_filtered = []
-    agg = {}
+    if matches_predict:
+        q_proteins.put((protein, prot_dbcode, length, descr_id,
+                        left_num, matches_predict))
 
-    for i in range(0, len(matches_all), chunk_size):
-        cur2.executemany(
+    if matches:
+        con.executemany(
             """
             INSERT /*+APPEND*/ INTO {}.MATCH (
                 PROTEIN_AC, METHOD_AC, MODEL_AC, 
-                POS_FROM, POS_TO, STATUS, DBCODE, FRAGMENTS
+                POS_FROM, POS_TO, DBCODE, FRAGMENTS
             )
-            VALUES (:1, :2, :3, :4, :5, :6, :7, :8)
+            VALUES (:1, :2, :3, :4, :5, :6, :7)
             """.format(schema),
-            matches_all[i:i + chunk_size]
+            matches
         )
         con.commit()
-    cnt_matches += len(matches_all)
-    matches_all = []
+        matches = []
 
-    cnt_proteins += 1
-    logging.info('{:>12} ({:.0f} proteins/sec)'.format(cnt_proteins, cnt_proteins // (time.time() - ts)))
-
-    # Wait for comparators to finish
     for _ in comparators:
-        proteins.put(None)
-
+        q_proteins.put(None)
+        
+    # Wait for comparators to complete
     for p in comparators:
         p.join()
 
-    logging.info('{} matches inserted'.format(cnt_matches))
-    comparisons.put(None)
+    # Triggers prediction/ METHOD2PROTEIN creating
+    q_matches.put(None)
 
-    logging.info('indexing MATCH table')
-    cur2.execute('CREATE INDEX I_MATCH$PROTEIN ON {}.MATCH (PROTEIN_AC) NOLOGGING'.format(schema))
-    cur2.execute('CREATE INDEX I_MATCH$DBCODE ON {}.MATCH (DBCODE) NOLOGGING'.format(schema))
-
-    logging.info('optimizing MATCH table')
-    oracledb.gather_stats(cur2, schema, 'MATCH', cascade=True)
-    oracledb.grant(cur2, 'SELECT', schema, 'MATCH', 'INTERPRO_SELECT')
-    cur2.close()
-    con.close()
-    logging.info('MATCH table ready')
+    # In the meantime: index MATCH
+    con.execute(
+        """
+        CREATE INDEX I_MATCH$PROTEIN 
+        ON {}.MATCH (PROTEIN_AC) NOLOGGING
+        """.format(schema)
+    )
+    con.execute(
+        """
+        CREATE INDEX I_MATCH$DBCODE
+        ON {}.MATCH (DBCODE) NOLOGGING
+        """.format(schema)
+    )
+    con.optimize_table(schema, "MATCH", cascade=True)
+    con.grant("SELECT", schema, "MATCH", "INTERPRO_SELECT")
 
     aggregator.join()
-    logging.info('complete')
+
+
+def copy_schema(dsn, schema):
+    proc = "{}.copy_interpro_analysis.refresh".format(schema)
+    Connection(dsn).exec(proc)
+
+
+def clear_schema(dsn, schema):
+    con = Connection(dsn)
+    for table in con.get_tables(schema):
+        con.drop_table(schema, table)
