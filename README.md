@@ -53,9 +53,3 @@ Available options are:
 | proteins      | Copy proteins from InterPro                                                    |
 | matches       | Copy protein matches from InterPro, and run predictions                        |
 | report        | Export gained/lost protein descriptions per InterPro entries                   |
-
-## Adding a step
-
-1. Write the step's function, taking three arguments: `dsn`, `schema`, and `**kwargs`.
-2. Edit `cli()` in `prontodb/__init__.py`, and add the step to `steps`.
-3. If the function requires more arguments, add those to `kwargs`.
