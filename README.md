@@ -22,7 +22,7 @@ Create or edit the `config.json` file to set the following settings:
 
 ## Run
 
-The only requirement argument is the path the `config.json`.
+The only requirement argument is the path to `config.json`.
 
 ```sh
 pronto-update config.json [OPTIONS]
