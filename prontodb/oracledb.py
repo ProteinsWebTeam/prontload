@@ -127,35 +127,3 @@ class Connection(object):
 
     def __del__(self):
         self.close()
-
-
-
-
-
-
-
-
-def create_synonym(cur, src, dst, obj):
-    cur.execute('CREATE OR REPLACE SYNONYM {0}.{2} FOR {1}.{2}'.format(dst, src, obj))
-
-
-def list_tables(cur, ownname):
-    cur.execute(
-        """
-        SELECT
-          table_name
-        FROM
-          dba_tables
-        WHERE
-          UPPER(owner) = :1
-        ORDER BY
-          table_name
-        """,
-        (ownname.upper(),)
-    )
-
-    return [row[0] for row in cur]
-
-
-def grant(cur, privilege, schema, tabname, grantee):
-    cur.execute('GRANT {} ON {}.{} TO {}'.format(privilege, schema, tabname, grantee))
