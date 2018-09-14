@@ -54,5 +54,5 @@ Available options are:
 | publications  | Copy publications from GOA                                                     |
 | terms         | Copy GO terms from GOA                                                         |
 | matches       | Copy protein matches from InterPro, and run predictions                        |
-| report        | Export gained/lost protein descriptions per InterPro entries                   |
 | copy          | Export the current schema to an other to prevent downtime during updates       |
+| report        | Export gained/lost protein descriptions per InterPro entries                   |
