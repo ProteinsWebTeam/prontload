@@ -1147,3 +1147,101 @@ def clear_schema(dsn, schema):
     con = Connection(dsn)
     for table in con.get_tables(schema):
         con.drop_table(schema, table)
+
+
+def report_description_changes(dsn, schema, output):
+    con = Connection(dsn)
+
+    """
+    Get descriptions for before update 
+    (METHOD2SWISS_DE was populated during protein update)
+    """
+    query = """
+        SELECT DISTINCT EM.ENTRY_AC, M.DESCRIPTION
+        FROM {0}.METHOD2SWISS_DE M
+        INNER JOIN {0}.ENTRY2METHOD EM 
+        ON M.METHOD_AC = EM.METHOD_AC
+    """.format(schema)
+    old_entries = {}
+    for acc, text in con.get(query):
+        if acc in old_entries:
+            old_entries[acc].append(text)
+        else:
+            old_entries[acc] = [text]
+
+    # Get descriptions for after update
+    query = """
+        SELECT DISTINCT EM.ENTRY_AC, D.TEXT
+        FROM {0}.METHOD2PROTEIN MP
+        INNER JOIN {0}.METHOD M ON MP.METHOD_AC = M.METHOD_AC
+        INNER JOIN {0}.DESC_VALUE D ON MP.DESC_ID = D.DESC_ID
+        INNER JOIN {0}.ENTRY2METHOD EM ON M.METHOD_AC = EM.METHOD_AC
+        WHERE MP.DBCODE = 'S' 
+    """.format(schema)
+    new_entries = {}
+    for acc, text in con.get(query):
+        if acc in new_entries:
+            new_entries[acc].append(text)
+        else:
+            new_entries[acc] = [text]
+
+    query = """
+        SELECT ENTRY_AC, ENTRY_TYPE, CHECKED
+        FROM {}.ENTRY
+    """.format(schema)
+    entry_info = {
+        acc: (entry_type, is_checked)
+        for acc, entry_type, is_checked in con.get(query)
+    }
+
+    entries = {}
+    for acc in old_entries:
+        try:
+            entry_type, is_checked = entry_info[acc]
+        except KeyError:
+            continue
+
+        if acc in new_entries:
+            descriptions = new_entries.pop(acc)
+            entries[acc] = {
+                "acc": acc,
+                "type": entry_type,
+                "checked": is_checked,
+                "lost": [d for d in old_entries[acc]
+                         if d not in descriptions],
+                "gained": [d for d in descriptions
+                           if d not in old_entries[acc]]
+            }
+        else:
+            # All descriptions lost (we lost the entry)
+            entries[acc] = {
+                "acc": acc,
+                "type": entry_type,
+                "checked": is_checked,
+                "lost": old_entries[acc],
+                "gained": []
+            }
+
+    for acc in new_entries:
+        entry_type, is_checked = entry_info[acc]
+        entries[acc] = {
+            "acc": acc,
+            "type": entry_type,
+            "checked": is_checked,
+            "lost": [],
+            "gained": new_entries[acc]
+        }
+
+    with open(output, "wt") as fh:
+        fh.write("Entry\tType\tChecked\t#Gained\t#Lost\tGained\tLost\n")
+
+        for e in sorted(entries.values(), key=lambda x: (0 if x["type"] == 'F' else 1, x["type"], x["acc"])):
+            fh.write("{}\t{}\t{}\t{}\t{}\t{}\t{}\n".format(
+                e["acc"],
+                e["type"],
+                e["checked"],
+                len(e["gained"]),
+                len(e["lost"]),
+                " | ".join(e["gained"]),
+                " | ".join(e["lost"])
+            ))
