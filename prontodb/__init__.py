@@ -122,6 +122,11 @@ def cli():
             "name": "copy",
             "func": interpro.copy_schema,
             "args": (dsn, schema)
+        },
+        {
+            "name": "report",
+            "func": interpro.report_description_changes,
+            "args": (dsn, schema, args.output)
         }
     ]
 
