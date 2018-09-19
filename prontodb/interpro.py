@@ -813,7 +813,7 @@ class MatchAggregator(Process):
         }
         left_numbers = {}
         query = """
-            SELECT RANK_LEFT_NUMBER_TAX_ID
+            SELECT RANK, LEFT_NUMBER, TAX_ID
             FROM {}.LINEAGE
         """.format(self.schema)
         for rank, left_num, tax_id in con.get(query):
