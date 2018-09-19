@@ -114,6 +114,7 @@ def cli():
             "args": (dsn, schema)
         },
         {
+            # Requires "descriptions" and "taxa"
             "name": "matches",
             "func": interpro.load_matches,
             "args": (dsn, schema, args.threads, max_gap, args.tmpdir)
