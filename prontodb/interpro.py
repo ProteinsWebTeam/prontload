@@ -1000,8 +1000,13 @@ class MatchAggregator(Process):
         return filepath
 
 
-def load_matches(dsn, schema, threads=1, max_gap=20, tmpdir=None,
-                 chunk_size=100000):
+def load_matches(dsn, schema, **kwargs):
+    threads = kwargs.get("threads", 1)
+    max_gap = kwargs.get("max_gap", 20)
+    tmpdir = kwargs.get("tmpdir")
+    chunk_size = kwargs.get("chunk_size", 100000)
+    limit = kwargs.get("limit", 0)
+
     q_proteins = Queue(maxsize=chunk_size)
     q_matches = Queue(maxsize=chunk_size)
 
@@ -1080,14 +1085,15 @@ def load_matches(dsn, schema, threads=1, max_gap=20, tmpdir=None,
         ORDER BY M.PROTEIN_AC
         """.format(schema)
 
-    matches = []          # matches to be inserted in the MATCH table
-    matches_predict = []  # matches to be used for protein match structure and predictions
-    methods = {}          # methods having matches to merge
-    protein = None      # previous protein accession
-    prot_dbcode = None  # protein DB code (S: SwissProt, T: TrEMBL)
-    length = None       # Sequence length
-    descr_id = None     # Description ID
-    left_num = None     # Taxon left number
+    matches = []            # matches to be inserted in the MATCH table
+    matches_predict = []    # matches to be used for protein match structure and predictions
+    methods = {}            # methods having matches to merge
+    protein = None          # previous protein accession
+    prot_dbcode = None      # protein DB code (S: SwissProt, T: TrEMBL)
+    length = None           # Sequence length
+    descr_id = None         # Description ID
+    left_num = None         # Taxon left number
+    cnt = 0
     for row in con.get(query):
         protein_acc = row[0]
 
@@ -1109,6 +1115,10 @@ def load_matches(dsn, schema, threads=1, max_gap=20, tmpdir=None,
                 if matches_predict:
                     q_proteins.put((protein, prot_dbcode, length, descr_id,
                                     left_num, matches_predict))
+
+                cnt += 1
+                if cnt == limit:
+                    break
 
             matches_predict = []
             methods = {}
