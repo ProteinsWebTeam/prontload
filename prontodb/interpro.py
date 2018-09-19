@@ -1000,7 +1000,8 @@ class MatchAggregator(Process):
         return filepath
 
 
-def load_matches(dsn, schema, threads=1, max_gap=20, tmpdir=None, chunk_size=100000):
+def load_matches(dsn, schema, threads=1, max_gap=20, tmpdir=None,
+                 chunk_size=100000):
     q_proteins = Queue(maxsize=chunk_size)
     q_matches = Queue(maxsize=chunk_size)
 
