@@ -800,6 +800,29 @@ class MatchAggregator(Process):
         con.optimize_table(self.schema, "METHOD_PREDICTION", cascade=True)
         con.grant("SELECT", self.schema, "METHOD_PREDICTION", "INTERPRO_SELECT")
 
+        # Get lineages
+        ranks = {
+            "superkingdom",
+            "kingdom",
+            "phylum",
+            "class",
+            "order",
+            "family",
+            "genus",
+            "species"
+        }
+        left_numbers = {}
+        query = """
+            SELECT RANK_LEFT_NUMBER_TAX_ID
+            FROM {}.LINEAGE
+        """.format(self.schema)
+        for rank, left_num, tax_id in con.get(query):
+            if rank not in ranks:
+                continue
+            elif left_num not in left_numbers:
+                left_numbers[left_num] = {}
+            left_numbers[left_num][rank] = tax_id
+
         # Creating METHOD2PROTEIN
         con.drop_table(self.schema, "METHOD2PROTEIN")
         con.execute(
@@ -818,18 +841,42 @@ class MatchAggregator(Process):
         )
 
         # Populating METHOD2PROTEIN_STG by loading files
+        methods = {}
         for filepath in files:
             with gzip.open(filepath, 'rt') as fh:
                 proteins = json.load(fh)
 
             os.unlink(filepath)
 
-            data = [
-                (method_ac, p['acc'], p['dbcode'], p['code'],
-                 p['length'], p['leftnum'], p['descr'])
-                for p in proteins
-                for method_ac in p['signatures']
-            ]
+            data = []
+            for p in proteins:
+                left_num = p["leftnum"]
+                items = list(left_numbers.get(left_num, {}).items())
+
+                for method_ac in p["signatures"]:
+                    data.append((
+                        method_ac,
+                        p["acc"],
+                        p["dbcode"],
+                        p["code"],
+                        p["length"],
+                        left_num,
+                        p["descr"]
+                    ))
+
+                    # Counting the taxonomic origin of signatures
+                    if method_ac in methods:
+                        ranks = methods[method_ac]
+                    else:
+                        ranks = methods[method_ac] = {}
+
+                    for rank, tax_id in items:
+                        if rank not in ranks:
+                            ranks[rank] = {tax_id: 1}
+                        elif tax_id not in ranks[rank]:
+                            ranks[rank][tax_id] = 1
+                        else:
+                            ranks[rank][tax_id] += 1
 
             for i in range(0, len(data), self.chunk_size):
                 con.executemany(
@@ -848,7 +895,7 @@ class MatchAggregator(Process):
             proteins = None
             data = None
 
-        # Optimizing METHOD2PROTEIN_STG
+        # Optimizing METHOD2PROTEIN
         con.execute(
             """
             ALTER TABLE {}.METHOD2PROTEIN
@@ -887,6 +934,49 @@ class MatchAggregator(Process):
 
         con.optimize_table(self.schema, "METHOD2PROTEIN", cascade=True)
         con.grant("SELECT", self.schema, "METHOD2PROTEIN", "INTERPRO_SELECT")
+
+        # Creating METHOD_TAXA
+        con.drop_table(self.schema, "METHOD_TAXA")
+        con.execute(
+            """
+            CREATE TABLE {}.METHOD_TAXA
+            (
+                METHOD_AC VARCHAR2(25) NOT NULL,
+                RANK VARCHAR2(50) NOT NULL,
+                TAX_ID NUMBER(10) NOT NULL,
+                PROTEIN_COUNT NUMBER(10) NOT NULL
+            ) NOLOGGING
+            """.format(self.schema)
+        )
+
+        # Populating METHOD_TAXA
+        for method_ac, ranks in methods.items():
+            con.executemany(
+                """
+                INSERT /*+APPEND*/ INTO {}.METHOD_TAXA (
+                    METHOD_AC, RANK, TAX_ID, PROTEIN_COUNT
+                )
+                VALUES (:1, :2, :3, :4)
+                """.format(self.schema),
+                [
+                    (method_ac, rank, tax_id, count)
+                    for rank, taxa in ranks.items()
+                    for tax_id, count in taxa.items()
+                ]
+            )
+            con.commit()
+
+        # Optimizing METHOD_TAXA
+        con.execute(
+            """
+            CREATE INDEX I_METHOD_TAXA
+            ON {}.METHOD_TAXA (METHOD_AC, RANK)
+            NOLOGGING
+            """.format(self.schema)
+        )
+
+        con.optimize_table(self.schema, "METHOD_TAXA", cascade=True)
+        con.grant("SELECT", self.schema, "METHOD_TAXA", "INTERPRO_SELECT")
 
     @staticmethod
     def base36encode(num):
