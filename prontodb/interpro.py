@@ -990,12 +990,12 @@ class MatchAggregator(Process):
         return encoded
 
     @staticmethod
-    def dump(proteins, tmpdir=None):
+    def dump(data, tmpdir=None):
         fd, filepath = mkstemp(suffix='.json.gz', dir=tmpdir)
         os.close(fd)
 
         with gzip.open(filepath, 'wt') as fh:
-            json.dump(proteins, fh)
+            json.dump(data, fh)
 
         return filepath
 
