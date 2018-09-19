@@ -1025,6 +1025,7 @@ def load_matches(dsn, schema, **kwargs):
     aggregator.start()
 
     con = Connection(dsn)
+    con.drop_table(schema, "MATCH")
     con.execute(
         """
         CREATE TABLE {}.MATCH
