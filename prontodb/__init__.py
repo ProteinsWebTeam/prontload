@@ -38,12 +38,12 @@ def cli():
 
     os.makedirs(args.tmpdir, exist_ok=True)
 
-    with open(args.config, 'rt') as fh:
+    with open(args.config, "rt") as fh:
         config = json.load(fh)
 
-    dsn = config['dsn']
-    schema = config['schema']
-    max_gap = int(config['max_gap'])
+    dsn = config["dsn"]
+    schema = config["schema"]
+    max_gap = int(config["max_gap"])
     
     steps = [
         {
@@ -55,7 +55,7 @@ def cli():
         {
             "name": "synomyms",
             "func": interpro.create_synonyms,
-            "args": (dsn, 'INTERPRO', schema, (
+            "args": (dsn, "INTERPRO", schema, (
                 "ENTRY",
                 "ENTRY2METHOD",
                 "ENTRY2ENTRY",
@@ -142,7 +142,7 @@ def cli():
                     "error: invalid step: '{}' "
                     "(choose from {})\n".format(
                         s,
-                        ', '.join(["'{}'".format(_s) for _s in step_names])
+                        ", ".join(["'{}'".format(_s) for _s in step_names])
                     )
                 )
                 exit(1)
