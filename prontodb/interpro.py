@@ -1013,7 +1013,7 @@ def load_matches(dsn, schema, **kwargs):
     # -2: main thread, aggregator
     comparators = [
         MatchComparator(q_proteins, q_matches, max_gap)
-        for _ in range(max(1, threads-3))
+        for _ in range(max(1, threads-2))
     ]
 
     aggregator = MatchAggregator(dsn, schema, q_matches,
