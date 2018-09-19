@@ -1119,11 +1119,11 @@ def load_matches(dsn, schema, **kwargs):
 
                 matches_predict = []
                 methods = {}
-                protein = protein_acc
-
                 cnt += 1
                 if cnt == limit:
                     break
+            
+            protein = protein_acc
 
         method_acc = row[1]
         model_acc = row[1] if row[2] is None else row[2]
