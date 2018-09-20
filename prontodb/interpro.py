@@ -1117,7 +1117,6 @@ def load_matches(dsn, schema, **kwargs):
     length = None           # Sequence length
     descr_id = None         # Description ID
     left_num = None         # Taxon left number
-    cnt = 0
     n_proteins = 0
     n_matches = 0
     for row in con.get(query):
@@ -1145,16 +1144,13 @@ def load_matches(dsn, schema, **kwargs):
                 matches_predict = []
                 methods = {}
                 n_proteins += 1
-                cnt += 1
                 if n_proteins == limit:
                     break
                 elif not n_proteins % 1000000:
                     info("{:>12} ({:.0f} proteins/sec)".format(
                         n_proteins,
-                        cnt // (time.time() - ts)
+                        n_proteins // (time.time() - ts)
                     ))
-                    cnt = 0
-                    ts = time.time()
             
             protein = protein_acc
 
@@ -1248,7 +1244,7 @@ def load_matches(dsn, schema, **kwargs):
 
     info("{:>12} ({:.0f} proteins/sec)".format(
         n_proteins,
-        cnt // (time.time() - ts)
+        n_proteins // (time.time() - ts)
     ))
 
     for _ in comparators:
