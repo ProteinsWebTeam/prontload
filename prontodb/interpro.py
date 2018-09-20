@@ -1035,8 +1035,10 @@ def load_matches(dsn, schema, **kwargs):
         for _ in range(max(1, threads-2))
     ]
 
-    aggregator = ProteinAggregator(dsn, schema, q_matches,
-                                 tmpdir=tmpdir, chunk_size=chunk_size)
+    aggregator = ProteinAggregator(
+        dsn, schema, q_matches,
+        tmpdir=tmpdir, chunk_size=chunk_size
+    )
 
     for p in comparators:
         p.start()
@@ -1146,7 +1148,7 @@ def load_matches(dsn, schema, **kwargs):
                 cnt += 1
                 if n_proteins == limit:
                     break
-                elif not cnt % 1000000:
+                elif not n_proteins % 1000000:
                     info("{:>12} ({:.0f} proteins/sec)".format(
                         n_proteins,
                         cnt // (time.time() - ts)
