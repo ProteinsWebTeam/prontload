@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 
 def cli():
@@ -160,5 +160,5 @@ def cli():
         step["func"](*step["args"])
 
     sys.stderr.write(
-        "{:%y-%m-%d %H:%M:%S}: complete\n".format(datetime.now()))
-
+        "{:%y-%m-%d %H:%M:%S}: complete\n".format(datetime.now())
+    )

@@ -5,6 +5,9 @@ import gzip
 import json
 import math
 import os
+import sys
+import time
+from datetime import datetime
 from multiprocessing import Process, Queue
 from tempfile import mkstemp
 
@@ -17,6 +20,12 @@ def create_synonyms(dsn, src, dst, tables=[]):
         query = ("CREATE OR REPLACE SYNONYM {0}.{2} "
                  "FOR {1}.{2}".format(dst, src, table_name))
         con.execute(query)
+
+
+def info(msg):
+    sys.stderr.write(
+        "{:%y-%m-%d %H:%M:%S}: {}\n".format(datetime.now(), msg)
+    )
 
 
 def load_databases(dsn, schema):
@@ -262,7 +271,7 @@ def load_proteins(dsn, schema):
     con.grant("SELECT", schema, "PROTEIN", "INTERPRO_SELECT")
 
 
-class MatchComparator(Process):
+class ProteinProcessor(Process):
     def __init__(self, tasks, results, max_gap):
         super().__init__()
         self.tasks = tasks
@@ -379,7 +388,7 @@ class MatchComparator(Process):
         return '/'.join(structure)
 
 
-class MatchAggregator(Process):
+class ProteinAggregator(Process):
     def __init__(self, dsn, schema, tasks, tmpdir=None, chunk_size=100000):
         super().__init__()
         self.dsn = dsn
@@ -492,6 +501,10 @@ class MatchAggregator(Process):
             files.append(self.dump(proteins))
             proteins = []
 
+        """
+        Get candidate signatures from DB 
+        (and non-PROSITE Pattern candidates)
+        """
         con = Connection(self.dsn)
         candidates = set()
         non_prosite_candidates = set()
@@ -505,6 +518,7 @@ class MatchAggregator(Process):
             if dbcode != 'P':
                 non_prosite_candidates.add(accession)
 
+        info("making predictions")
         # Determine relations/adjacent
         relations = {}
         adjacents = {}
@@ -659,6 +673,7 @@ class MatchAggregator(Process):
                     predictions.append((acc_2, acc_1, prediction))
 
         # Populating METHOD_MATCH
+        info("creating METHOD_MATCH table")
         con.drop_table(self.schema, "METHOD_MATCH")
         con.execute(
             """
@@ -693,6 +708,7 @@ class MatchAggregator(Process):
         con.grant("SELECT", self.schema, "METHOD_MATCH", "INTERPRO_SELECT")
 
         # Creating METHOD_OVERLAP
+        info("creating METHOD_OVERLAP table")
         con.drop_table(self.schema, "METHOD_OVERLAP")
         con.execute(
             """
@@ -765,6 +781,7 @@ class MatchAggregator(Process):
         con.grant("SELECT", self.schema, "METHOD_OVERLAP", "INTERPRO_SELECT")
 
         # Creating METHOD_PREDICTION
+        info("creating METHOD_PREDICTION table")
         con.drop_table(self.schema, "METHOD_PREDICTION")
         con.execute(
             """
@@ -824,6 +841,7 @@ class MatchAggregator(Process):
             left_numbers[left_num][rank] = tax_id
 
         # Creating METHOD2PROTEIN
+        info("creating METHOD2PROTEIN table")
         con.drop_table(self.schema, "METHOD2PROTEIN")
         con.execute(
             """
@@ -936,6 +954,7 @@ class MatchAggregator(Process):
         con.grant("SELECT", self.schema, "METHOD2PROTEIN", "INTERPRO_SELECT")
 
         # Creating METHOD_TAXA
+        info("creating METHOD_TAXA table")
         con.drop_table(self.schema, "METHOD_TAXA")
         con.execute(
             """
@@ -1012,11 +1031,11 @@ def load_matches(dsn, schema, **kwargs):
 
     # -2: main thread, aggregator
     comparators = [
-        MatchComparator(q_proteins, q_matches, max_gap)
+        ProteinProcessor(q_proteins, q_matches, max_gap)
         for _ in range(max(1, threads-2))
     ]
 
-    aggregator = MatchAggregator(dsn, schema, q_matches,
+    aggregator = ProteinAggregator(dsn, schema, q_matches,
                                  tmpdir=tmpdir, chunk_size=chunk_size)
 
     for p in comparators:
@@ -1086,6 +1105,8 @@ def load_matches(dsn, schema, **kwargs):
         ORDER BY M.PROTEIN_AC
         """.format(schema)
 
+    info("starting")
+    ts = time.time()
     matches = []            # matches to be inserted in the MATCH table
     matches_predict = []    # matches to be used for protein match structure and predictions
     methods = {}            # methods having matches to merge
@@ -1095,6 +1116,8 @@ def load_matches(dsn, schema, **kwargs):
     descr_id = None         # Description ID
     left_num = None         # Taxon left number
     cnt = 0
+    n_proteins = 0
+    n_matches = 0
     for row in con.get(query):
         protein_acc = row[0]
 
@@ -1119,9 +1142,17 @@ def load_matches(dsn, schema, **kwargs):
 
                 matches_predict = []
                 methods = {}
+                n_proteins += 1
                 cnt += 1
-                if cnt == limit:
+                if n_proteins == limit:
                     break
+                elif not cnt % 1000000:
+                    info("{:>12} ({:.0f} proteins/sec)".format(
+                        n_proteins,
+                        cnt // (time.time() - ts)
+                    ))
+                    cnt = 0
+                    ts = time.time()
             
             protein = protein_acc
 
@@ -1154,6 +1185,7 @@ def load_matches(dsn, schema, **kwargs):
                 matches
             )
             con.commit()
+            n_matches += len(matches)
             matches = []
 
         """
@@ -1209,7 +1241,13 @@ def load_matches(dsn, schema, **kwargs):
             matches
         )
         con.commit()
+        n_matches += len(matches)
         matches = []
+
+    info("{:>12} ({:.0f} proteins/sec)".format(
+        n_proteins,
+        cnt // (time.time() - ts)
+    ))
 
     for _ in comparators:
         q_proteins.put(None)
@@ -1236,6 +1274,7 @@ def load_matches(dsn, schema, **kwargs):
     )
     con.optimize_table(schema, "MATCH", cascade=True)
     con.grant("SELECT", schema, "MATCH", "INTERPRO_SELECT")
+    info("{} matches inserted".format(n_matches))
 
     aggregator.join()
 
