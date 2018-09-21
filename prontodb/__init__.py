@@ -115,7 +115,11 @@ def cli():
             # Requires "descriptions" and "taxa"
             "name": "matches",
             "func": interpro.load_matches,
-            "args": (dsn, schema, args.threads, max_gap, args.tmpdir)
+            "args": (dsn, schema),
+            "kwargs": dict(
+                max_gap=max_gap,
+                tmpdir=args.tmpdir
+            )
         },
         {
             "name": "copy",
@@ -155,7 +159,7 @@ def cli():
                 datetime.now(), step["name"]
             )
         )
-        step["func"](*step["args"])
+        step["func"](*step["args"], **step.get("kwargs", {}))
 
     sys.stderr.write(
         "{:%y-%m-%d %H:%M:%S}: complete\n".format(datetime.now())
