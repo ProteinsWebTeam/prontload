@@ -33,7 +33,6 @@ Available options are:
 | Option        | Description                                                                    |
 | ------------- |--------------------------------------------------------------------------------|
 | -s, --steps   | space-separated list of steps to run (default: all)                            |
-| -p, --threads | number of child processes to use for the `matches` step (default: `1`)         |
 | -t, --tmpdir  | directory for temporary files (default: `/tmp/`)                               |
 | -o, --output  | output file for the Swiss-Prot descriptions report for curators                |
 
