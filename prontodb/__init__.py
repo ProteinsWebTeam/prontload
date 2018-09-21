@@ -24,7 +24,7 @@ def cli():
     )
     parser.add_argument("config",
                         help="config JSON file")
-    parser.add_argument("-s", "--steps", metavar="step", nargs="+",
+    parser.add_argument("-s", "--steps", metavar="step", nargs="*",
                         help="steps to perform (default: all)")
     parser.add_argument("-t", "--tmpdir", default=gettempdir(),
                         help="temporary directory "
