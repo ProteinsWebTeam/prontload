@@ -8,7 +8,7 @@ import os
 import sys
 import time
 from datetime import datetime
-from multiprocessing import Process, Queue
+from multiprocessing import Process, Pipe
 from tempfile import mkstemp
 
 from .oracledb import Connection
@@ -271,129 +271,14 @@ def load_proteins(dsn, schema):
     con.grant("SELECT", schema, "PROTEIN", "INTERPRO_SELECT")
 
 
-class ProteinProcessor(Process):
-    def __init__(self, tasks, results, max_gap):
-        super().__init__()
-        self.tasks = tasks
-        self.results = results
-        self.max_gap = max_gap
-
-    def run(self):
-        while True:
-            task = self.tasks.get()
-            if task is None:
-                break
-
-            acc, dbcode, length, descr_id, left_num, matches = task
-            structure = self.condense(matches, self.max_gap)
-            signatures, comparisons = self.compare(matches)
-            self.results.put((
-                acc, dbcode, length, descr_id, left_num,
-                structure, signatures, comparisons
-            ))
-
-    @staticmethod
-    def compare(matches):
-        comparisons = []
-        signatures = {}
-        for m1_acc, m1_start, m1_end in matches:
-            m1_len = m1_end - m1_start + 1
-
-            if m1_acc in signatures:
-                signatures[m1_acc] += 1
-            else:
-                signatures[m1_acc] = 1
-
-            for m2_acc, m2_start, m2_end in matches:
-                m2_len = m2_end - m2_start + 1
-                """
-                1           13      end position *is* included
-                -------------       match 1 (13 - 1 + 1 = 13 aa)
-                        --------    match 2 (16 - 9 + 1 = 8 aa)
-                        9      16
-                                    overlap = 13 - 9 + 1 = 5
-                                    frac 1 = 5 / 13 = 0.38...
-                                    frac 2 = 5 / 8 = 0.625
-                """
-                if m1_acc <= m2_acc:
-                    comparisons.append((
-                        m1_acc,
-                        m1_len,
-                        m2_acc,
-                        m2_len,
-                        # overlap length
-                        min(m1_end, m2_end) - max(m1_start, m2_start) + 1
-                    ))
-
-        return list(signatures.items()), comparisons
-
-    @staticmethod
-    def condense(matches, max_gap):
-        # flatten matches
-        locations = []
-
-        for method_ac, pos_start, pos_end in matches:
-            locations.append((pos_start, method_ac))
-            locations.append((pos_end, method_ac))
-
-        """
-        Evaluate the protein's match structure, 
-            i.e. how signatures match the proteins
-
-        -----------------------------   Protein
-         <    >                         Signature 1
-           <    >                       Signature 2
-                      < >               Signature 3
-
-        Flattened:
-        -----------------------------   Protein
-         < <  > >     < >
-         1 2  1 2     3 3
-
-        Structure, with '-' representing a "gap" 
-            (more than N bp between two positions):
-        1212-33
-        """
-
-        # Sort locations by position
-        locations.sort()
-
-        """
-        Do not set the offset to 0, but to the first position:
-        if two proteins have the same structure,
-        but the first position of one protein is > max_gap 
-        while the first position of the other protein is <= max_gap,
-        a gap will be used for the first protein and not for the other, 
-        which will results in two different structures
-        """
-        offset = locations[0][0]
-
-        structure = []  # overall match structure
-        methods = []  # close signatures (less than max_gap between two positions)
-
-        for pos, method_ac in sorted(locations):
-            if pos > offset + max_gap:
-                for _pos, _ac in methods:
-                    structure.append(_ac)
-
-                structure.append('')  # add a gap
-                methods = []
-
-            offset = pos
-            methods.append((pos, method_ac))
-
-        for _pos, _ac in methods:
-            structure.append(_ac)
-
-        return '/'.join(structure)
-
-
-class ProteinAggregator(Process):
-    def __init__(self, dsn, schema, tasks, tmpdir=None, chunk_size=100000):
+class ProteinConsumer(Process):
+    def __init__(self, dsn, schema, max_gap, connection,
+                 tmpdir=None, chunk_size=100000):
         super().__init__()
         self.dsn = dsn
         self.schema = schema
-        self.tasks = tasks
+        self.max_gap = max_gap
+        self.connection = connection
         self.tmpdir = tmpdir
         self.chunk_size = chunk_size
 
@@ -405,12 +290,13 @@ class ProteinAggregator(Process):
         files = []
 
         while True:
-            task = self.tasks.get()
+            task = self.connection.recv()
             if task is None:
                 break
 
-            (accession, dbcode, length, descr_id, left_num,
-             _structure, _signatures, _comparisons) = task
+            accession, dbcode, length, descr_id, left_num, matches = task
+            _structure = self.condense(matches, self.max_gap)
+            _signatures, _comparisons = self.compare(matches)
 
             # struct: condensed match structure of the protein
             if _structure in structures:
@@ -440,8 +326,8 @@ class ProteinAggregator(Process):
                         "matches": 0
                     }
 
-                signatures[acc]['proteins'] += 1
-                signatures[acc]['matches'] += n_matches
+                signatures[acc]["proteins"] += 1
+                signatures[acc]["matches"] += n_matches
 
             if len(proteins) == self.chunk_size:
                 files.append(self.dump(proteins, self.tmpdir))
@@ -969,7 +855,26 @@ class ProteinAggregator(Process):
         )
 
         # Populating METHOD_TAXA
+        data = []
         for method_ac, ranks in methods.items():
+            for rank, taxa in ranks.items():
+                for tax_id, count in taxa.items():
+                    data.append((method_ac, rank, tax_id, count))
+
+                    if len(data) == self.chunk_size:
+                        con.executemany(
+                            """
+                            INSERT /*+APPEND*/ INTO {}.METHOD_TAXA (
+                                METHOD_AC, RANK, TAX_ID, PROTEIN_COUNT
+                            )
+                            VALUES (:1, :2, :3, :4)
+                            """.format(self.schema),
+                            data
+                        )
+                        con.commit()
+                        data = []
+
+        if data:
             con.executemany(
                 """
                 INSERT /*+APPEND*/ INTO {}.METHOD_TAXA (
@@ -977,13 +882,10 @@ class ProteinAggregator(Process):
                 )
                 VALUES (:1, :2, :3, :4)
                 """.format(self.schema),
-                [
-                    (method_ac, rank, tax_id, count)
-                    for rank, taxa in ranks.items()
-                    for tax_id, count in taxa.items()
-                ]
+                data
             )
             con.commit()
+            data = []
 
         # Optimizing METHOD_TAXA
         con.execute(
@@ -996,6 +898,101 @@ class ProteinAggregator(Process):
 
         con.optimize_table(self.schema, "METHOD_TAXA", cascade=True)
         con.grant("SELECT", self.schema, "METHOD_TAXA", "INTERPRO_SELECT")
+
+    @staticmethod
+    def compare(matches):
+        comparisons = []
+        signatures = {}
+        for m1_acc, m1_start, m1_end in matches:
+            m1_len = m1_end - m1_start + 1
+
+            if m1_acc in signatures:
+                signatures[m1_acc] += 1
+            else:
+                signatures[m1_acc] = 1
+
+            for m2_acc, m2_start, m2_end in matches:
+                m2_len = m2_end - m2_start + 1
+                """
+                1           13      end position *is* included
+                -------------       match 1 (13 - 1 + 1 = 13 aa)
+                        --------    match 2 (16 - 9 + 1 = 8 aa)
+                        9      16
+                                    overlap = 13 - 9 + 1 = 5
+                                    frac 1 = 5 / 13 = 0.38...
+                                    frac 2 = 5 / 8 = 0.625
+                """
+                if m1_acc <= m2_acc:
+                    comparisons.append((
+                        m1_acc,
+                        m1_len,
+                        m2_acc,
+                        m2_len,
+                        # overlap length
+                        min(m1_end, m2_end) - max(m1_start, m2_start) + 1
+                    ))
+
+        return list(signatures.items()), comparisons
+
+    @staticmethod
+    def condense(matches, max_gap):
+        # flatten matches
+        locations = []
+
+        for method_ac, pos_start, pos_end in matches:
+            locations.append((pos_start, method_ac))
+            locations.append((pos_end, method_ac))
+
+        """
+        Evaluate the protein's match structure, 
+            i.e. how signatures match the proteins
+
+        -----------------------------   Protein
+         <    >                         Signature 1
+           <    >                       Signature 2
+                      < >               Signature 3
+
+        Flattened:
+        -----------------------------   Protein
+         < <  > >     < >
+         1 2  1 2     3 3
+
+        Structure, with '-' representing a "gap" 
+            (more than N bp between two positions):
+        1212-33
+        """
+
+        # Sort locations by position
+        locations.sort()
+
+        """
+        Do not set the offset to 0, but to the first position:
+        if two proteins have the same structure,
+        but the first position of one protein is > max_gap 
+        while the first position of the other protein is <= max_gap,
+        a gap will be used for the first protein and not for the other, 
+        which will results in two different structures
+        """
+        offset = locations[0][0]
+
+        structure = []  # overall match structure
+        methods = []  # close signatures (less than max_gap between two positions)
+
+        for pos, method_ac in sorted(locations):
+            if pos > offset + max_gap:
+                for _pos, _ac in methods:
+                    structure.append(_ac)
+
+                structure.append('')  # add a gap
+                methods = []
+
+            offset = pos
+            methods.append((pos, method_ac))
+
+        for _pos, _ac in methods:
+            structure.append(_ac)
+
+        return '/'.join(structure)
 
     @staticmethod
     def base36encode(num):
@@ -1019,31 +1016,82 @@ class ProteinAggregator(Process):
         return filepath
 
 
+def iter_matches(src, schema):
+    if os.path.isfile(src):
+        with gzip.open(src, "rt") as fh:
+            for line in fh:
+                yield json.loads(line.rstrip())
+    else:
+        # Consider src is a Connection instance
+        query = """
+                SELECT 
+                  M.*, P.LEN, P.FRAGMENT, P.DBCODE, 
+                  PD.DESC_ID, NVL(E.LEFT_NUMBER, 0)
+                FROM (
+                    SELECT
+                      MA.PROTEIN_AC AS PROTEIN_AC,
+                      MA.METHOD_AC AS METHOD_AC,
+                      MA.MODEL_AC AS MODEL_AC,
+                      MA.POS_FROM AS POS_FROM,
+                      MA.POS_TO AS POS_TO,
+                      MA.FRAGMENTS AS FRAGMENTS,
+                      MA.DBCODE AS M_DBCODE,
+                      ME.SIG_TYPE AS SIG_TYPE
+                    FROM INTERPRO.MATCH MA
+                      INNER JOIN INTERPRO.METHOD ME 
+                        ON MA.METHOD_AC = ME.METHOD_AC
+                    UNION ALL
+                    SELECT
+                      FM.PROTEIN_AC AS PROTEIN_AC,
+                      FM.METHOD_AC AS METHOD_AC,
+                      FM.METHOD_AC AS MODEL_AC,
+                      FM.POS_FROM AS POS_FROM,
+                      FM.POS_TO AS POS_TO,
+                      NULL AS FRAGMENTS,
+                      FM.DBCODE AS M_DBCODE,
+                      ME.SIG_TYPE AS SIG_TYPE
+                    FROM INTERPRO.FEATURE_MATCH FM
+                      INNER JOIN INTERPRO.METHOD ME 
+                        ON FM.METHOD_AC = ME.METHOD_AC
+                    WHERE FM.DBCODE = 'g'
+                    UNION ALL            
+                    SELECT
+                      ME.PROTEIN_AC AS PROTEIN_AC,
+                      ME.CODE AS METHOD_AC,
+                      ME.CODE AS MODEL_AC,
+                      ME.POS_FROM AS POS_FROM,
+                      ME.POS_TO AS POS_TO,
+                      NULL AS FRAGMENTS,
+                      'm' AS M_DBCODE,
+                      NULL AS SIG_TYPE
+                    FROM INTERPRO.MEROPS ME        
+                ) M
+                INNER JOIN INTERPRO.PROTEIN P 
+                  ON M.PROTEIN_AC = P.PROTEIN_AC
+                INNER JOIN INTERPRO.ETAXI E 
+                  ON P.TAX_ID = E.TAX_ID
+                INNER JOIN {}.PROTEIN_DESC PD 
+                  ON M.PROTEIN_AC = PD.PROTEIN_AC
+                ORDER BY M.PROTEIN_AC
+                """.format(schema)
+
+        for row in src.get(query):
+            yield row
+
+
 def load_matches(dsn, schema, **kwargs):
-    threads = kwargs.get("threads", 1)
+    chunk_size = kwargs.get("chunk_size", 100000)
+    filepath = kwargs.get("filepath")
+    limit = kwargs.get("limit", 0)
     max_gap = kwargs.get("max_gap", 20)
     tmpdir = kwargs.get("tmpdir")
-    chunk_size = kwargs.get("chunk_size", 100000)
-    limit = kwargs.get("limit", 0)
 
-    q_proteins = Queue(maxsize=chunk_size)
-    q_matches = Queue(maxsize=chunk_size)
-
-    # -2: main thread, aggregator
-    comparators = [
-        ProteinProcessor(q_proteins, q_matches, max_gap)
-        for _ in range(max(1, threads-2))
-    ]
-
-    aggregator = ProteinAggregator(
-        dsn, schema, q_matches,
+    conn_out, conn_in = Pipe(duplex=False)
+    consumer = ProteinConsumer(
+        dsn, schema, max_gap, conn_out,
         tmpdir=tmpdir, chunk_size=chunk_size
     )
-
-    for p in comparators:
-        p.start()
-
-    aggregator.start()
+    consumer.start()
 
     con = Connection(dsn)
     con.drop_table(schema, "MATCH")
@@ -1062,64 +1110,27 @@ def load_matches(dsn, schema, **kwargs):
         """.format(schema)
     )
     
-    query = """
-        SELECT M.*, P.LEN, P.FRAGMENT, P.DBCODE, PD.DESC_ID, NVL(E.LEFT_NUMBER, 0)
-        FROM (
-            SELECT
-              MA.PROTEIN_AC AS PROTEIN_AC,
-              MA.METHOD_AC AS METHOD_AC,
-              MA.MODEL_AC AS MODEL_AC,
-              MA.POS_FROM AS POS_FROM,
-              MA.POS_TO AS POS_TO,
-              MA.FRAGMENTS AS FRAGMENTS,
-              MA.DBCODE AS M_DBCODE,
-              ME.SIG_TYPE AS SIG_TYPE
-            FROM INTERPRO.MATCH MA
-              INNER JOIN INTERPRO.METHOD ME ON MA.METHOD_AC = ME.METHOD_AC
-            UNION ALL
-            SELECT
-              FM.PROTEIN_AC AS PROTEIN_AC,
-              FM.METHOD_AC AS METHOD_AC,
-              FM.METHOD_AC AS MODEL_AC,
-              FM.POS_FROM AS POS_FROM,
-              FM.POS_TO AS POS_TO,
-              NULL AS FRAGMENTS,
-              FM.DBCODE AS M_DBCODE,
-              ME.SIG_TYPE AS SIG_TYPE
-            FROM INTERPRO.FEATURE_MATCH FM
-              INNER JOIN INTERPRO.METHOD ME ON FM.METHOD_AC = ME.METHOD_AC
-            WHERE FM.DBCODE = 'g'
-            UNION ALL            
-            SELECT
-              ME.PROTEIN_AC AS PROTEIN_AC,
-              ME.CODE AS METHOD_AC,
-              ME.CODE AS MODEL_AC,
-              ME.POS_FROM AS POS_FROM,
-              ME.POS_TO AS POS_TO,
-              NULL AS FRAGMENTS,
-              'm' AS M_DBCODE,
-              NULL AS SIG_TYPE
-            FROM INTERPRO.MEROPS ME        
-        ) M
-        INNER JOIN INTERPRO.PROTEIN P ON M.PROTEIN_AC = P.PROTEIN_AC
-        INNER JOIN INTERPRO.ETAXI E ON P.TAX_ID = E.TAX_ID
-        INNER JOIN {}.PROTEIN_DESC PD ON M.PROTEIN_AC = PD.PROTEIN_AC
-        ORDER BY M.PROTEIN_AC
-        """.format(schema)
-
     info("starting")
     ts = time.time()
-    matches = []            # matches to be inserted in the MATCH table
-    matches_predict = []    # matches to be used for protein match structure and predictions
-    methods = {}            # methods having matches to merge
-    protein = None          # previous protein accession
-    prot_dbcode = None      # protein DB code (S: SwissProt, T: TrEMBL)
-    length = None           # Sequence length
-    descr_id = None         # Description ID
-    left_num = None         # Taxon left number
+    # matches to be inserted in the MATCH table
+    matches = []
+    # matches to be used for protein match structure and predictions
+    matches_agg = []
+    # methods having matches to merge
+    methods = {}
+    # previous protein accession
+    protein = None
+    # protein DB code (S: SwissProt, T: TrEMBL)
+    prot_dbcode = None
+    # Sequence length
+    length = None
+    # Description ID
+    descr_id = None
+    # Taxon left number
+    left_num = None
     n_proteins = 0
     n_matches = 0
-    for row in con.get(query):
+    for row in iter_matches(filepath if filepath else con, schema):
         protein_acc = row[0]
 
         if protein_acc != protein:
@@ -1135,13 +1146,15 @@ def load_matches(dsn, schema, **kwargs):
                         if max_pos is None or end > max_pos:
                             max_pos = end
 
-                    matches_predict.append((method_acc, min_pos, max_pos))
+                        matches_agg.append((method_acc, min_pos, max_pos))
 
-                if matches_predict:
-                    q_proteins.put((protein, prot_dbcode, length, descr_id,
-                                    left_num, matches_predict))
+                if matches_agg:
+                    conn_in.send((
+                        protein, prot_dbcode, length,
+                        descr_id, left_num, matches_agg
+                    ))
 
-                matches_predict = []
+                matches_agg = []
                 methods = {}
                 n_proteins += 1
                 if n_proteins == limit:
@@ -1198,7 +1211,7 @@ def load_matches(dsn, schema, **kwargs):
         if is_fragment or method_dbcode == 'g':
             continue
         elif method_dbcode not in ('F', 'V'):
-            matches_predict.append((method_acc, start, end))
+            matches_agg.append((method_acc, start, end))
         elif method_acc not in methods:
             if method_type == 'F':
                 # Families: use the entire protein sequence
@@ -1221,11 +1234,13 @@ def load_matches(dsn, schema, **kwargs):
             if max_pos is None or end > max_pos:
                 max_pos = end
 
-        matches_predict.append((method_acc, min_pos, max_pos))
+            matches_agg.append((method_acc, min_pos, max_pos))
 
-    if matches_predict:
-        q_proteins.put((protein, prot_dbcode, length, descr_id,
-                        left_num, matches_predict))
+    if matches_agg:
+        conn_in.send((
+            protein, prot_dbcode, length,
+            descr_id, left_num, matches_agg
+        ))
 
     if matches:
         con.executemany(
@@ -1247,15 +1262,8 @@ def load_matches(dsn, schema, **kwargs):
         n_proteins // (time.time() - ts)
     ))
 
-    for _ in comparators:
-        q_proteins.put(None)
-        
-    # Wait for comparators to complete
-    for p in comparators:
-        p.join()
-
     # Triggers prediction/ METHOD2PROTEIN creating
-    q_matches.put(None)
+    conn_in.send(None)
 
     # In the meantime: index MATCH
     con.execute(
@@ -1274,7 +1282,7 @@ def load_matches(dsn, schema, **kwargs):
     con.grant("SELECT", schema, "MATCH", "INTERPRO_SELECT")
     info("{} matches inserted".format(n_matches))
 
-    aggregator.join()
+    consumer.join()
 
 
 def copy_schema(dsn, schema):
