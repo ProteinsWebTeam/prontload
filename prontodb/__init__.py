@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-__version__ = "0.4.1"
+__version__ = "0.4.2"
 
 
 def cli():
@@ -26,8 +26,6 @@ def cli():
                         help="config JSON file")
     parser.add_argument("-s", "--steps", metavar="step", nargs="+",
                         help="steps to perform (default: all)")
-    parser.add_argument("-p", "--threads", default=1, type=int,
-                        help="number of threads")
     parser.add_argument("-t", "--tmpdir", default=gettempdir(),
                         help="temporary directory "
                              "(default: {})".format(gettempdir()))
