@@ -61,7 +61,7 @@ def load_databases(dsn, schema):
 
 def load_signatures(dsn, schema):
     con = Connection(dsn)
-    con.drop_table(schema, "METHODS")
+    con.drop_table(schema, "METHOD")
     con.execute(
         """
         CREATE TABLE {}.METHOD
