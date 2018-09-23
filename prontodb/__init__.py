@@ -57,8 +57,7 @@ def cli():
                 "ENTRY",
                 "ENTRY2METHOD",
                 "ENTRY2ENTRY",
-                "ENTRY2COMP",
-                "METHOD2SWISS_DE"
+                "ENTRY2COMP"
             ))
         },
         {
