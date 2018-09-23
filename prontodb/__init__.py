@@ -51,7 +51,7 @@ def cli():
             "skip": True
         },
         {
-            "name": "synomyms",
+            "name": "synonyms",
             "func": interpro.create_synonyms,
             "args": (dsn, "INTERPRO", schema, (
                 "ENTRY",
