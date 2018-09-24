@@ -22,7 +22,7 @@ Create or edit the `config.json` file to set the following settings:
 
 ## Run
 
-The only requirement argument is the path the `config.json`.
+The only requirement argument is the path to `config.json`.
 
 ```sh
 pronto-update config.json [OPTIONS]
@@ -32,30 +32,26 @@ Available options are:
 
 | Option        | Description                                                                    |
 | ------------- |--------------------------------------------------------------------------------|
-| -s, --step    | space-separated list of steps to run (default: all)                            |
-| -p, --threads | number of child processes to use for the `matches` step (default: `2`)         |
-| -t, --temp    | directory for temporary files (default: probably `/tmp/`)                      |
+| -s, --steps   | space-separated list of steps to run (default: all)                            |
+| -t, --tmpdir  | directory for temporary files (default: `/tmp/`)                               |
 | -o, --output  | output file for the Swiss-Prot descriptions report for curators                |
 
 ### Steps
 
 | Name          | Description                                                                    |
 | ------------- |--------------------------------------------------------------------------------|
-| databases     | Copy database info (e.g. name, version) from InterPro                          |
+| clear         | Drop all tables from the current schema (skipped unless explicitly called)     |
 | synonyms      | Create synonyms for InterPro tables that are updated daily by curators         |
+| databases     | Copy database info (e.g. name, version) from InterPro                          |
+| signatures    | Copy member database signatures from InterPro                                  |
+| taxa          | Copy taxonomy data from InterPro                                               |
+| proteins      | Copy proteins from InterPro                                                    |
 | comments      | Copy Swiss-Prot comments from UniProt                                          |
 | descriptions  | Copy protein descriptions from UniProt                                         |
 | enzymes       | Copy EC numbers ([ENZYME](https://enzyme.expasy.org/)) FROM UniProt            |
-| protein2go    | Copy protein GO annotations from GOA                                           |
-| methods       | Copy member database signatures from InterPro                                  |
-| taxonomies    | Copy taxonomy data from InterPro                                               |
+| annotations   | Copy protein GO annotations from GOA                                           |
+| publications  | Copy publications from GOA                                                     |
 | terms         | Copy GO terms from GOA                                                         |
-| proteins      | Copy proteins from InterPro                                                    |
 | matches       | Copy protein matches from InterPro, and run predictions                        |
+| copy          | Export the current schema to an other to prevent downtime during updates       |
 | report        | Export gained/lost protein descriptions per InterPro entries                   |
-
-## Adding a step
-
-1. Write the step's function, taking three arguments: `dsn`, `schema`, and `**kwargs`.
-2. Edit `cli()` in `prontodb/__init__.py`, and add the step to `steps`.
-3. If the function requires more arguments, add those to `kwargs`.
