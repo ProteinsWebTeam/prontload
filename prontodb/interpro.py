@@ -1017,11 +1017,7 @@ class ProteinConsumer(Process):
 
 
 def iter_matches(src, schema):
-    if os.path.isfile(src):
-        with gzip.open(src, "rt") as fh:
-            for line in fh:
-                yield json.loads(line.rstrip())
-    else:
+    if isinstance(src, Connection):
         # Consider src is a Connection instance
         query = """
                 SELECT 
@@ -1077,6 +1073,10 @@ def iter_matches(src, schema):
 
         for row in src.get(query):
             yield row
+    else:
+        with gzip.open(src, "rt") as fh:
+            for line in fh:
+                yield json.loads(line.rstrip())
 
 
 def load_matches(dsn, schema, **kwargs):
