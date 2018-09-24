@@ -287,6 +287,7 @@ class ProteinConsumer(Process):
         signatures = {}
         comparisons = {}
         proteins = []
+        n_proteins = 0
         files = []
 
         while True:
@@ -315,6 +316,7 @@ class ProteinConsumer(Process):
                 "signatures": []
             }
             proteins.append(p)
+            n_proteins += 1
 
             # _signatures: number of times each signature matched the protein
             for acc, n_matches in _signatures:
@@ -386,6 +388,12 @@ class ProteinConsumer(Process):
         if proteins:
             files.append(self.dump(proteins))
             proteins = []
+
+        info("{} proteins ({} files, {} bytes)".format(
+            n_proteins,
+            len(files),
+            sum(map(os.path.getsize, files))
+        ))
 
         """
         Get candidate signatures from DB 
