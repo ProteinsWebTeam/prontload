@@ -273,7 +273,7 @@ def load_proteins(dsn, schema):
 
 class ProteinConsumer(Process):
     def __init__(self, dsn, schema, max_gap, connection,
-                 tmpdir=None, chunk_size=100000):
+                 tmpdir=None, chunk_size=100000, json_size=1000000):
         super().__init__()
         self.dsn = dsn
         self.schema = schema
@@ -281,6 +281,7 @@ class ProteinConsumer(Process):
         self.connection = connection
         self.tmpdir = tmpdir
         self.chunk_size = chunk_size
+        self.json_size = json_size
 
     def run(self):
         structures = {}
@@ -331,7 +332,7 @@ class ProteinConsumer(Process):
                 signatures[acc]["proteins"] += 1
                 signatures[acc]["matches"] += n_matches
 
-            if len(proteins) == self.chunk_size:
+            if len(proteins) == self.json_size:
                 files.append(self.dump(proteins, self.tmpdir))
                 proteins = []
 
@@ -752,7 +753,7 @@ class ProteinConsumer(Process):
             """.format(self.schema)
         )
 
-        # Populating METHOD2PROTEIN_STG by loading files
+        # Populating METHOD2PROTEIN by loading files
         methods = {}
         for filepath in files:
             with gzip.open(filepath, 'rt') as fh:
