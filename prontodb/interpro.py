@@ -1151,11 +1151,11 @@ def load_matches(dsn, schema, **kwargs):
 
                         matches_agg.append((method_acc, min_pos, max_pos))
 
-                if matches_agg:
-                    conn_in.send((
-                        protein, prot_dbcode, length,
-                        descr_id, left_num, matches_agg
-                    ))
+                # if matches_agg:
+                #     conn_in.send((
+                #         protein, prot_dbcode, length,
+                #         descr_id, left_num, matches_agg
+                #     ))
 
                 matches_agg = []
                 methods = {}
@@ -1188,17 +1188,17 @@ def load_matches(dsn, schema, **kwargs):
             method_dbcode, fragments
         ))
         if len(matches) == chunk_size:
-            con.executemany(
-                """
-                INSERT /*+APPEND*/ INTO {}.MATCH (
-                    PROTEIN_AC, METHOD_AC, MODEL_AC, 
-                    POS_FROM, POS_TO, DBCODE, FRAGMENTS
-                )
-                VALUES (:1, :2, :3, :4, :5, :6, :7)
-                """.format(schema),
-                matches
-            )
-            con.commit()
+            # con.executemany(
+            #     """
+            #     INSERT /*+APPEND*/ INTO {}.MATCH (
+            #         PROTEIN_AC, METHOD_AC, MODEL_AC,
+            #         POS_FROM, POS_TO, DBCODE, FRAGMENTS
+            #     )
+            #     VALUES (:1, :2, :3, :4, :5, :6, :7)
+            #     """.format(schema),
+            #     matches
+            # )
+            # con.commit()
             n_matches += len(matches)
             matches = []
 
@@ -1239,24 +1239,24 @@ def load_matches(dsn, schema, **kwargs):
 
             matches_agg.append((method_acc, min_pos, max_pos))
 
-    if matches_agg:
-        conn_in.send((
-            protein, prot_dbcode, length,
-            descr_id, left_num, matches_agg
-        ))
+    # if matches_agg:
+    #     conn_in.send((
+    #         protein, prot_dbcode, length,
+    #         descr_id, left_num, matches_agg
+    #     ))
 
     if matches:
-        con.executemany(
-            """
-            INSERT /*+APPEND*/ INTO {}.MATCH (
-                PROTEIN_AC, METHOD_AC, MODEL_AC, 
-                POS_FROM, POS_TO, DBCODE, FRAGMENTS
-            )
-            VALUES (:1, :2, :3, :4, :5, :6, :7)
-            """.format(schema),
-            matches
-        )
-        con.commit()
+        # con.executemany(
+        #     """
+        #     INSERT /*+APPEND*/ INTO {}.MATCH (
+        #         PROTEIN_AC, METHOD_AC, MODEL_AC,
+        #         POS_FROM, POS_TO, DBCODE, FRAGMENTS
+        #     )
+        #     VALUES (:1, :2, :3, :4, :5, :6, :7)
+        #     """.format(schema),
+        #     matches
+        # )
+        # con.commit()
         n_matches += len(matches)
         matches = []
 
