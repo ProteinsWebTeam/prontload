@@ -7,7 +7,7 @@ import logging
 import math
 import os
 import time
-from multiprocessing import Process, Pipe
+from multiprocessing import Process, Queue
 from tempfile import mkstemp
 
 from .oracledb import Connection
@@ -266,7 +266,7 @@ def load_proteins(dsn, schema):
 
 class ProteinConsumer(Process):
     def __init__(self, dsn, schema, max_gap, connection,
-                 tmpdir=None, chunk_size=100000, json_size=1000000):
+                 tmpdir=None, chunk_size=100000):
         super().__init__()
         self.dsn = dsn
         self.schema = schema
@@ -274,114 +274,111 @@ class ProteinConsumer(Process):
         self.connection = connection
         self.tmpdir = tmpdir
         self.chunk_size = chunk_size
-        self.json_size = json_size
 
     def run(self):
         structures = {}
         signatures = {}
         comparisons = {}
-        proteins = []
         n_proteins = 0
         files = []
 
         while True:
-            task = self.connection.recv()
+            task = self.connection.get()
             if task is None:
                 break
 
-            accession, dbcode, length, descr_id, left_num, matches = task
-            _structure = self.condense(matches, self.max_gap)
-            _signatures, _comparisons = self.compare(matches)
-
-            # struct: condensed match structure of the protein
-            if _structure in structures:
-                code = structures[_structure]
-            else:
-                code = self.base36encode(len(structures) + 1)
-                structures[_structure] = code
-
-            p = {
-                "acc": accession,
-                "dbcode": dbcode,
-                "length": length,
-                "descr": descr_id,
-                "leftnum": left_num,
-                "code": code,
-                "signatures": []
-            }
-            proteins.append(p)
-            n_proteins += 1
-
-            # _signatures: number of times each signature matched the protein
-            for acc, n_matches in _signatures:
-                p["signatures"].append(acc)
-
-                if acc not in signatures:
-                    signatures[acc] = {
-                        "proteins": 0,
-                        "matches": 0
-                    }
-
-                signatures[acc]["proteins"] += 1
-                signatures[acc]["matches"] += n_matches
-
-            if len(proteins) == self.json_size:
-                files.append(self.dump(proteins, self.tmpdir))
-                proteins = []
-
-            # _comparisons: match overlaps between signatures
-            collocations = set()
-            overlaps = set()
-
-            for acc_1, len_1, acc_2, len_2, overlap in _comparisons:
-                if acc_1 in comparisons:
-                    d = comparisons[acc_1]
-                else:
-                    d = comparisons[acc_1] = {}
-
-                if acc_2 in d:
-                    comp = d[acc_2]
-                else:
-                    comp = d[acc_2] = {
-                        # number of proteins in which both signatures occur (not necessarily overlapping)
-                        'prot': 0,
-                        # number of proteins in which signatures overlap
-                        'prot_over': 0,
-                        # number of times signatures overlap (>= prot_over)
-                        'over': 0,
-                        # sum of overlap lengths (to compute the average length later)
-                        'length': 0,
-                        # sum of fractions of matches overlapping (overlap length / match length)
-                        'frac_1': 0,
-                        'frac_2': 0
-                    }
-
-                acc = (acc_1, acc_2)
-                if acc not in collocations:
-                    # First collocation (acc_1, acc_2) for the current protein
-                    collocations.add(acc)
-                    comp['prot'] += 1
-
-                if overlap > (min(len_1, len_2) / 2):
-                    """
-                    Consider that matches significantly overlap 
-                    if the overlap is longer 
-                    than the half of the shortest match
-                    """
-                    comp['frac_1'] += overlap / len_1
-                    comp['frac_2'] += overlap / len_2
-                    comp['over'] += 1
-                    comp['length'] += overlap
-
-                    if acc not in overlaps:
-                        # First overlap (acc_1, acc_2) for the current protein
-                        overlaps.add(acc)
-                        comp['prot_over'] += 1
-
-        # Dump proteins left in memory
-        if proteins:
-            files.append(self.dump(proteins))
             proteins = []
+            for accession, dbcode, l, descr_id, left_num, matches in task:
+                _structure = self.condense(matches, self.max_gap)
+                _signatures, _comparisons = self.compare(matches)
+
+                # struct: condensed match structure of the protein
+                if _structure in structures:
+                    code = structures[_structure]
+                else:
+                    code = self.base36encode(len(structures) + 1)
+                    structures[_structure] = code
+
+                p = {
+                    "acc": accession,
+                    "dbcode": dbcode,
+                    "length": l,
+                    "descr": descr_id,
+                    "leftnum": left_num,
+                    "code": code,
+                    "signatures": []
+                }
+                n_proteins += 1
+
+                # _signatures: num of matches per signature
+                for acc, n_matches in _signatures:
+                    p["signatures"].append(acc)
+
+                    if acc not in signatures:
+                        signatures[acc] = {
+                            "proteins": 0,
+                            "matches": 0
+                        }
+
+                    signatures[acc]["proteins"] += 1
+                    signatures[acc]["matches"] += n_matches
+
+                # _comparisons: match overlaps between signatures
+                collocations = set()
+                overlaps = set()
+                for acc_1, len_1, acc_2, len_2, overlap in _comparisons:
+                    if acc_1 in comparisons:
+                        d = comparisons[acc_1]
+                    else:
+                        d = comparisons[acc_1] = {}
+
+                    if acc_2 in d:
+                        comp = d[acc_2]
+                    else:
+                        comp = d[acc_2] = {
+                            # num of proteins in which both sign. occur
+                            # (not necessarily overlapping)
+                            'prot': 0,
+                            # num of proteins in which signatures overlap
+                            'prot_over': 0,
+                            # num of times signatures overlap (>= prot_over)
+                            'over': 0,
+                            # sum of overlap lengths
+                            # (to compute the average length later)
+                            'length': 0,
+                            # sum of fractions of matches overlapping
+                            # (overlap length / match length)
+                            'frac_1': 0,
+                            'frac_2': 0
+                        }
+
+                    acc = (acc_1, acc_2)
+                    if acc not in collocations:
+                        # First collocation (acc_1, acc_2)
+                        # for the current protein
+                        collocations.add(acc)
+                        comp['prot'] += 1
+
+                    if overlap > (min(len_1, len_2) / 2):
+                        """
+                        Consider that matches significantly overlap 
+                        if the overlap is longer 
+                        than the half of the shortest match
+                        """
+                        comp['frac_1'] += overlap / len_1
+                        comp['frac_2'] += overlap / len_2
+                        comp['over'] += 1
+                        comp['length'] += overlap
+
+                        if acc not in overlaps:
+                            # First overlap (acc_1, acc_2)
+                            # for the current protein
+                            overlaps.add(acc)
+                            comp['prot_over'] += 1
+
+                proteins.append(p)
+
+            files.append(self.dump(proteins, self.tmpdir))
 
         logging.info("{} proteins ({} files, {} bytes)".format(
             n_proteins,
@@ -417,7 +414,8 @@ class ProteinConsumer(Process):
                 s_2 = signatures[acc_2]
                 c = comparisons[acc_1][acc_2]
 
-                if c['prot_over'] >= s_1['proteins'] * 0.4 or c['prot_over'] >= s_2['proteins'] * 0.4:
+                if (c['prot_over'] >= s_1['proteins'] * 0.4
+                        or c['prot_over'] >= s_2['proteins'] * 0.4):
                     # is a relation
                     if acc_1 in relations:
                         relations[acc_1].append(acc_2)
@@ -431,7 +429,8 @@ class ProteinConsumer(Process):
                         adjacents[acc_1] = [acc_2]
 
                 if acc_1 != acc_2:
-                    if c['prot_over'] >= s_1['proteins'] * 0.4 or c['prot_over'] >= s_2['proteins'] * 0.4:
+                    if (c['prot_over'] >= s_1['proteins'] * 0.4
+                            or c['prot_over'] >= s_2['proteins'] * 0.4):
                         # is a relation
                         if acc_2 in relations:
                             relations[acc_2].append(acc_1)
@@ -448,13 +447,16 @@ class ProteinConsumer(Process):
         Determine extra/adjacent relation:
 
         Let A, and B be two signatures in a relationship.
-        extra relation:     number of signatures in a relationship with A but not with B
-        adjacent relation:  number of signatures in a relationship with A and adjacent to B
+        extra relation:
+            num of signatures in a relationship with A but not with B
+        adjacent relation:  
+            num of signatures in a relationship with A and adjacent to B
         """
         extra_relations = {}
         adj_relations = {}
         for acc_1 in relations:
-            # signatures in a relationship with acc_1 (that are candidate and not from PROSITE pattern)
+            # signatures in a relationship with acc_1
+            # (that are candidate and not from PROSITE pattern)
             rel_1 = set(relations[acc_1]) & non_prosite_candidates
 
             for acc_2 in relations[acc_1]:
@@ -491,25 +493,37 @@ class ProteinConsumer(Process):
                 c = comparisons[acc_1][acc_2]
                 s_2 = signatures[acc_2]
 
-                if c['prot_over'] >= s_1['proteins'] * 0.4 or c['prot_over'] >= s_2['proteins'] * 0.4:
+                if (c['prot_over'] >= s_1['proteins'] * 0.4
+                        or c['prot_over'] >= s_2['proteins'] * 0.4):
                     extra_1 = extra_relations.get(acc_1, {}).get(acc_2, 0)
                     extra_2 = extra_relations.get(acc_2, {}).get(acc_1, 0)
 
-                    # inverting acc2 and acc1 to have the same predictions than HH, todo: check if it is really ok
+                    """
+                    Inverting acc2 and acc1 
+                    to have the same predictions than HH
+                    """
+                    # TODO: is this really OK?
                     adj_1 = adj_relations.get(acc_2, {}).get(acc_1, 0)
                     adj_2 = adj_relations.get(acc_1, {}).get(acc_2, 0)
 
                     if c['over']:
                         """
-                        frac_1 and frac_2 are the sum of ratios (overlap / match length).
-                        if close to 1, it means that the match was mostly contained by the overlap in most cases
+                        frac_1 and frac_2 are the sum of ratios 
+                        (overlap / match length).
+                        if close to 1: 
+                            the match was mostly contained 
+                            by the overlap in most cases
+                            
                                 A   -------------
                                 B       ---             
 
-                            frac(B) = overlap(A,B) / length(B) = 1 (indeed B is 100% within the overlap)
+                            frac(B) = overlap(A,B) / length(B) 
+                                    = 1 
+                                    indeed B is 100% within the overlap
 
                         len_1 and len_2 are the average of sums.
-                        If len(B) is close to 1, it means that B was mostly within the overlap in most cases
+                        If len(B) is close to 1:
+                            B was mostly within the overlap in most cases
                             so B < A (because B ~ overlap and A >= overlap)
                             so B CONTAINED_BY A 
                         """
@@ -1084,16 +1098,16 @@ def iter_matches(src, schema):
 
 
 def load_matches(dsn, schema, **kwargs):
-    chunk_size = kwargs.get("chunk_size", 100000)
+    chunk_size = kwargs.get("chunk_size", 1000000)
     filepath = kwargs.get("filepath")
     limit = kwargs.get("limit", 0)
     max_gap = kwargs.get("max_gap", 20)
     tmpdir = kwargs.get("tmpdir")
 
-    conn_out, conn_in = Pipe(duplex=False)
+    queue = Queue()
     consumer = ProteinConsumer(
-        dsn, schema, max_gap, conn_out,
-        tmpdir=tmpdir, chunk_size=chunk_size
+        dsn, schema, max_gap, queue,
+        tmpdir=tmpdir
     )
     consumer.start()
 
@@ -1133,6 +1147,7 @@ def load_matches(dsn, schema, **kwargs):
     left_num = None
     n_proteins = 0
     n_matches = 0
+    chunk = []
     for row in iter_matches(filepath if filepath else con, schema):
         protein_acc = row[0]
 
@@ -1152,10 +1167,14 @@ def load_matches(dsn, schema, **kwargs):
                         matches_agg.append((method_acc, min_pos, max_pos))
 
                 if matches_agg:
-                    conn_in.send((
+                    chunk.append((
                         protein, prot_dbcode, length,
                         descr_id, left_num, matches_agg
                     ))
+
+                    if len(chunk) == chunk_size:
+                        queue.put(chunk)
+                        chunk = []
 
                 matches_agg = []
                 methods = {}
@@ -1191,7 +1210,7 @@ def load_matches(dsn, schema, **kwargs):
             con.executemany(
                 """
                 INSERT /*+APPEND*/ INTO {}.MATCH (
-                    PROTEIN_AC, METHOD_AC, MODEL_AC, 
+                    PROTEIN_AC, METHOD_AC, MODEL_AC,
                     POS_FROM, POS_TO, DBCODE, FRAGMENTS
                 )
                 VALUES (:1, :2, :3, :4, :5, :6, :7)
@@ -1240,16 +1259,20 @@ def load_matches(dsn, schema, **kwargs):
             matches_agg.append((method_acc, min_pos, max_pos))
 
     if matches_agg:
-        conn_in.send((
+        chunk.append((
             protein, prot_dbcode, length,
             descr_id, left_num, matches_agg
         ))
+
+    if chunk:
+        queue.put(chunk)
+        chunk = []
 
     if matches:
         con.executemany(
             """
             INSERT /*+APPEND*/ INTO {}.MATCH (
-                PROTEIN_AC, METHOD_AC, MODEL_AC, 
+                PROTEIN_AC, METHOD_AC, MODEL_AC,
                 POS_FROM, POS_TO, DBCODE, FRAGMENTS
             )
             VALUES (:1, :2, :3, :4, :5, :6, :7)
@@ -1266,7 +1289,7 @@ def load_matches(dsn, schema, **kwargs):
     ))
 
     # Triggers prediction/ METHOD2PROTEIN creating
-    conn_in.send(None)
+    queue.put(None)
 
     # In the meantime: index MATCH
     con.execute(
