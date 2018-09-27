@@ -266,7 +266,7 @@ def load_proteins(dsn, schema):
 
 class ProteinConsumer(Process):
     def __init__(self, dsn, schema, max_gap, connection,
-                 tmpdir=None, chunk_size=100000):
+                 tmpdir=None, chunk_size=100000, compress=True):
         super().__init__()
         self.dsn = dsn
         self.schema = schema
@@ -274,6 +274,7 @@ class ProteinConsumer(Process):
         self.connection = connection
         self.tmpdir = tmpdir
         self.chunk_size = chunk_size
+        self.compress = compress
 
     def run(self):
         structures = {}
@@ -378,7 +379,7 @@ class ProteinConsumer(Process):
 
                 proteins.append(p)
 
-            files.append(self.dump(proteins, self.tmpdir))
+            files.append(self.dump(proteins, self.compress, self.tmpdir))
 
         logging.info("{} proteins ({} files, {} bytes)".format(
             n_proteins,
@@ -762,8 +763,9 @@ class ProteinConsumer(Process):
 
         # Populating METHOD2PROTEIN by loading files
         methods = {}
+        _open = gzip.open if self.compress else open
         for filepath in files:
-            with gzip.open(filepath, 'rt') as fh:
+            with _open(filepath, 'rt') as fh:
                 proteins = json.load(fh)
 
             os.unlink(filepath)
@@ -1024,11 +1026,18 @@ class ProteinConsumer(Process):
         return encoded
 
     @staticmethod
-    def dump(data, tmpdir=None):
-        fd, filepath = mkstemp(suffix='.json.gz', dir=tmpdir)
+    def dump(data, compress=True, tmpdir=None):
+        if compress:
+            _open = gzip.open
+            suffix = ".json.gz"
+        else:
+            _open = open
+            suffix = ".json"
+
+        fd, filepath = mkstemp(suffix=suffix, dir=tmpdir)
         os.close(fd)
 
-        with gzip.open(filepath, 'wt') as fh:
+        with _open(filepath, 'wt') as fh:
             json.dump(data, fh)
 
         return filepath
@@ -1099,15 +1108,16 @@ def iter_matches(src, schema):
 
 def load_matches(dsn, schema, **kwargs):
     chunk_size = kwargs.get("chunk_size", 1000000)
+    compress = kwargs.get("compress", True)
+    max_gap = kwargs.get("max_gap", 20)
     filepath = kwargs.get("filepath")
     limit = kwargs.get("limit", 0)
-    max_gap = kwargs.get("max_gap", 20)
     tmpdir = kwargs.get("tmpdir")
 
     queue = Queue()
     consumer = ProteinConsumer(
         dsn, schema, max_gap, queue,
-        tmpdir=tmpdir
+        tmpdir=tmpdir, compress=compress
     )
     consumer.start()
 
