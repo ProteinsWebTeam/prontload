@@ -1114,7 +1114,6 @@ def load_matches(dsn, schema, **kwargs):
         """.format(schema)
     )
 
-    logging.info("starting")
     ts = time.time()
     # matches to be inserted in the MATCH table
     matches = []
