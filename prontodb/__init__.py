@@ -3,6 +3,13 @@
 
 __version__ = "0.4.2"
 
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+
 
 def cli():
     import argparse
@@ -153,13 +160,7 @@ def cli():
 
     for i in to_run:
         step = steps[i]
-        sys.stderr.write(
-            "{:%y-%m-%d %H:%M:%S}: running '{}'\n".format(
-                datetime.now(), step["name"]
-            )
-        )
+        logging.info("running '{}'".format(step["name"]))
         step["func"](*step["args"], **step.get("kwargs", {}))
 
-    sys.stderr.write(
-        "{:%y-%m-%d %H:%M:%S}: complete\n".format(datetime.now())
-    )
+    logging.info("complete")

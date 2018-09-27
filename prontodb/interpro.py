@@ -3,11 +3,10 @@
 
 import gzip
 import json
+import logging
 import math
 import os
-import sys
 import time
-from datetime import datetime
 from multiprocessing import Process, Pipe
 from tempfile import mkstemp
 
@@ -20,12 +19,6 @@ def create_synonyms(dsn, src, dst, tables=[]):
         query = ("CREATE OR REPLACE SYNONYM {0}.{2} "
                  "FOR {1}.{2}".format(dst, src, table_name))
         con.execute(query)
-
-
-def info(msg):
-    sys.stderr.write(
-        "{:%y-%m-%d %H:%M:%S}: {}\n".format(datetime.now(), msg)
-    )
 
 
 def load_databases(dsn, schema):
@@ -390,7 +383,7 @@ class ProteinConsumer(Process):
             files.append(self.dump(proteins))
             proteins = []
 
-        info("{} proteins ({} files, {} bytes)".format(
+        logging.info("{} proteins ({} files, {} bytes)".format(
             n_proteins,
             len(files),
             sum(map(os.path.getsize, files))
@@ -413,7 +406,7 @@ class ProteinConsumer(Process):
             if dbcode != 'P':
                 non_prosite_candidates.add(accession)
 
-        info("making predictions")
+        logging.info("making predictions")
         # Determine relations/adjacent
         relations = {}
         adjacents = {}
@@ -568,7 +561,7 @@ class ProteinConsumer(Process):
                     predictions.append((acc_2, acc_1, prediction))
 
         # Populating METHOD_MATCH
-        info("creating METHOD_MATCH table")
+        logging.info("creating METHOD_MATCH table")
         con.drop_table(self.schema, "METHOD_MATCH")
         con.execute(
             """
@@ -603,7 +596,7 @@ class ProteinConsumer(Process):
         con.grant("SELECT", self.schema, "METHOD_MATCH", "INTERPRO_SELECT")
 
         # Creating METHOD_OVERLAP
-        info("creating METHOD_OVERLAP table")
+        logging.info("creating METHOD_OVERLAP table")
         con.drop_table(self.schema, "METHOD_OVERLAP")
         con.execute(
             """
@@ -676,7 +669,7 @@ class ProteinConsumer(Process):
         con.grant("SELECT", self.schema, "METHOD_OVERLAP", "INTERPRO_SELECT")
 
         # Creating METHOD_PREDICTION
-        info("creating METHOD_PREDICTION table")
+        logging.info("creating METHOD_PREDICTION table")
         con.drop_table(self.schema, "METHOD_PREDICTION")
         con.execute(
             """
@@ -736,7 +729,7 @@ class ProteinConsumer(Process):
             left_numbers[left_num][rank] = tax_id
 
         # Creating METHOD2PROTEIN
-        info("creating METHOD2PROTEIN table")
+        logging.info("creating METHOD2PROTEIN table")
         con.drop_table(self.schema, "METHOD2PROTEIN")
         con.execute(
             """
@@ -764,7 +757,9 @@ class ProteinConsumer(Process):
             data = []
             for p in proteins:
                 left_num = p["leftnum"]
-                items = list(left_numbers.get(left_num, {}).items())
+                items = list(
+                    left_numbers.get(left_num, {"no rank": -1}).items()
+                )
 
                 for method_ac in p["signatures"]:
                     data.append((
@@ -849,7 +844,7 @@ class ProteinConsumer(Process):
         con.grant("SELECT", self.schema, "METHOD2PROTEIN", "INTERPRO_SELECT")
 
         # Creating METHOD_TAXA
-        info("creating METHOD_TAXA table")
+        logging.info("creating METHOD_TAXA table")
         con.drop_table(self.schema, "METHOD_TAXA")
         con.execute(
             """
@@ -1118,8 +1113,8 @@ def load_matches(dsn, schema, **kwargs):
         ) NOLOGGING
         """.format(schema)
     )
-    
-    info("starting")
+
+    logging.info("starting")
     ts = time.time()
     # matches to be inserted in the MATCH table
     matches = []
@@ -1169,11 +1164,11 @@ def load_matches(dsn, schema, **kwargs):
                 if n_proteins == limit:
                     break
                 elif not n_proteins % 1000000:
-                    info("{:>12} ({:.0f} proteins/sec)".format(
+                    logging.info("{:>12} ({:.0f} proteins/sec)".format(
                         n_proteins,
                         n_proteins // (time.time() - ts)
                     ))
-            
+
             protein = protein_acc
 
         method_acc = row[1]
@@ -1266,7 +1261,7 @@ def load_matches(dsn, schema, **kwargs):
         n_matches += len(matches)
         matches = []
 
-    info("{:>12} ({:.0f} proteins/sec)".format(
+    logging.info("{:>12} ({:.0f} proteins/sec)".format(
         n_proteins,
         n_proteins // (time.time() - ts)
     ))
@@ -1289,7 +1284,7 @@ def load_matches(dsn, schema, **kwargs):
     )
     con.optimize_table(schema, "MATCH", cascade=True)
     con.grant("SELECT", schema, "MATCH", "INTERPRO_SELECT")
-    info("{} matches inserted".format(n_matches))
+    logging.info("{} matches inserted".format(n_matches))
 
     consumer.join()
 
