@@ -86,7 +86,7 @@ def load_signatures(dsn, schema):
     )
     con.execute(
         """
-        CREATE INDEX I_METHOD$DBCODE 
+        CREATE INDEX I_METHOD$DBCODE
         ON {}.METHOD (DBCODE) NOLOGGING
         """.format(schema)
     )
@@ -128,11 +128,11 @@ def load_taxa(dsn, schema, chunk_size=100000):
     con.execute(
         """
         INSERT /*+APPEND*/ INTO {}.ETAXI (
-            TAX_ID, PARENT_ID, SCIENTIFIC_NAME, RANK, 
+            TAX_ID, PARENT_ID, SCIENTIFIC_NAME, RANK,
             LEFT_NUMBER, RIGHT_NUMBER, FULL_NAME
         )
-        SELECT 
-            TAX_ID, PARENT_ID, SCIENTIFIC_NAME, RANK, 
+        SELECT
+            TAX_ID, PARENT_ID, SCIENTIFIC_NAME, RANK,
             LEFT_NUMBER, RIGHT_NUMBER, FULL_NAME
         FROM INTERPRO.ETAXI
         """.format(schema)
@@ -234,7 +234,7 @@ def load_proteins(dsn, schema):
         INSERT /*+APPEND*/ INTO {}.PROTEIN (
             PROTEIN_AC, NAME, DBCODE, LEN, FRAGMENT, TAX_ID
         )
-        SELECT 
+        SELECT
             PROTEIN_AC, NAME, DBCODE, LEN, FRAGMENT, TAX_ID
         FROM INTERPRO.PROTEIN
         """.format(schema)
@@ -249,13 +249,13 @@ def load_proteins(dsn, schema):
     )
     con.execute(
         """
-        CREATE INDEX I_PROTEIN$DBCODE 
+        CREATE INDEX I_PROTEIN$DBCODE
         ON {}.PROTEIN (DBCODE) NOLOGGING
         """.format(schema)
     )
     con.execute(
         """
-        CREATE INDEX I_PROTEIN$NAME 
+        CREATE INDEX I_PROTEIN$NAME
         ON {}.PROTEIN (NAME) NOLOGGING
         """.format(schema)
     )
@@ -362,8 +362,8 @@ class ProteinConsumer(Process):
 
                     if overlap > (min(len_1, len_2) / 2):
                         """
-                        Consider that matches significantly overlap 
-                        if the overlap is longer 
+                        Consider that matches significantly overlap
+                        if the overlap is longer
                         than the half of the shortest match
                         """
                         comp['frac_1'] += overlap / len_1
@@ -388,7 +388,7 @@ class ProteinConsumer(Process):
         ))
 
         """
-        Get candidate signatures from DB 
+        Get candidate signatures from DB
         (and non-PROSITE Pattern candidates)
         """
         con = Connection(self.dsn)
@@ -450,7 +450,7 @@ class ProteinConsumer(Process):
         Let A, and B be two signatures in a relationship.
         extra relation:
             num of signatures in a relationship with A but not with B
-        adjacent relation:  
+        adjacent relation:
             num of signatures in a relationship with A and adjacent to B
         """
         extra_relations = {}
@@ -500,7 +500,7 @@ class ProteinConsumer(Process):
                     extra_2 = extra_relations.get(acc_2, {}).get(acc_1, 0)
 
                     """
-                    Inverting acc2 and acc1 
+                    Inverting acc2 and acc1
                     to have the same predictions than HH
                     """
                     # TODO: is this really OK?
@@ -509,24 +509,24 @@ class ProteinConsumer(Process):
 
                     if c['over']:
                         """
-                        frac_1 and frac_2 are the sum of ratios 
+                        frac_1 and frac_2 are the sum of ratios
                         (overlap / match length).
-                        if close to 1: 
-                            the match was mostly contained 
+                        if close to 1:
+                            the match was mostly contained
                             by the overlap in most cases
-                            
-                                A   -------------
-                                B       ---             
 
-                            frac(B) = overlap(A,B) / length(B) 
-                                    = 1 
+                                A   -------------
+                                B       ---
+
+                            frac(B) = overlap(A,B) / length(B)
+                                    = 1
                                     indeed B is 100% within the overlap
 
                         len_1 and len_2 are the average of sums.
                         If len(B) is close to 1:
                             B was mostly within the overlap in most cases
                             so B < A (because B ~ overlap and A >= overlap)
-                            so B CONTAINED_BY A 
+                            so B CONTAINED_BY A
                         """
                         len_1 = c['frac_1'] / c['over']
                         len_2 = c['frac_2'] / c['over']
@@ -663,7 +663,7 @@ class ProteinConsumer(Process):
             con.executemany(
                 """
                 INSERT /*+APPEND*/ INTO {}.METHOD_OVERLAP (
-                    METHOD_AC1, METHOD_AC2, N_PROT, N_OVER, 
+                    METHOD_AC1, METHOD_AC2, N_PROT, N_OVER,
                     N_PROT_OVER, AVG_OVER, AVG_FRAC1, AVG_FRAC2
                 )
                 VALUES (:1, :2, :3, :4, :5, :6, :7, :8)
@@ -676,7 +676,7 @@ class ProteinConsumer(Process):
         con.execute(
             """
             ALTER TABLE {}.METHOD_OVERLAP
-            ADD CONSTRAINT PK_METHOD_OVERLAP 
+            ADD CONSTRAINT PK_METHOD_OVERLAP
             PRIMARY KEY (METHOD_AC1, METHOD_AC2)
             """.format(self.schema)
         )
@@ -701,7 +701,7 @@ class ProteinConsumer(Process):
         for i in range(0, len(predictions), self.chunk_size):
             con.executemany(
                 """
-                INSERT /*+APPEND*/ 
+                INSERT /*+APPEND*/
                 INTO {}.METHOD_PREDICTION (METHOD_AC1, METHOD_AC2, RELATION)
                 VALUES (:1, :2, :3)
                 """.format(self.schema),
@@ -713,7 +713,7 @@ class ProteinConsumer(Process):
         con.execute(
             """
             ALTER TABLE {}.METHOD_PREDICTION
-            ADD CONSTRAINT PK_METHOD_PREDICTION 
+            ADD CONSTRAINT PK_METHOD_PREDICTION
             PRIMARY KEY (METHOD_AC1, METHOD_AC2)
             """.format(self.schema)
         )
@@ -806,7 +806,7 @@ class ProteinConsumer(Process):
                 con.executemany(
                     """
                     INSERT /*+APPEND*/ INTO {}.METHOD2PROTEIN (
-                        METHOD_AC, PROTEIN_AC, DBCODE, 
+                        METHOD_AC, PROTEIN_AC, DBCODE,
                         CONDENSE, LEN, LEFT_NUMBER, DESC_ID
                     )
                     VALUES (:1, :2, :3, :4, :5, :6, :7)
@@ -823,7 +823,7 @@ class ProteinConsumer(Process):
         con.execute(
             """
             ALTER TABLE {}.METHOD2PROTEIN
-            ADD CONSTRAINT PK_METHOD2PROTEIN 
+            ADD CONSTRAINT PK_METHOD2PROTEIN
             PRIMARY KEY (METHOD_AC, PROTEIN_AC)
             """.format(self.schema)
         )
@@ -964,7 +964,7 @@ class ProteinConsumer(Process):
             locations.append((pos_end, method_ac))
 
         """
-        Evaluate the protein's match structure, 
+        Evaluate the protein's match structure,
             i.e. how signatures match the proteins
 
         -----------------------------   Protein
@@ -977,7 +977,7 @@ class ProteinConsumer(Process):
          < <  > >     < >
          1 2  1 2     3 3
 
-        Structure, with '-' representing a "gap" 
+        Structure, with '-' representing a "gap"
             (more than N bp between two positions):
         1212-33
         """
@@ -988,9 +988,9 @@ class ProteinConsumer(Process):
         """
         Do not set the offset to 0, but to the first position:
         if two proteins have the same structure,
-        but the first position of one protein is > max_gap 
+        but the first position of one protein is > max_gap
         while the first position of the other protein is <= max_gap,
-        a gap will be used for the first protein and not for the other, 
+        a gap will be used for the first protein and not for the other,
         which will results in two different structures
         """
         offset = locations[0][0]
@@ -1047,56 +1047,31 @@ def iter_matches(src, schema):
     if isinstance(src, Connection):
         # Consider src is a Connection instance
         query = """
-                SELECT 
-                  M.*, P.LEN, P.FRAGMENT, P.DBCODE, 
-                  PD.DESC_ID, NVL(E.LEFT_NUMBER, 0)
-                FROM (
-                    SELECT
-                      MA.PROTEIN_AC AS PROTEIN_AC,
-                      MA.METHOD_AC AS METHOD_AC,
-                      MA.MODEL_AC AS MODEL_AC,
-                      MA.POS_FROM AS POS_FROM,
-                      MA.POS_TO AS POS_TO,
-                      MA.FRAGMENTS AS FRAGMENTS,
-                      MA.DBCODE AS M_DBCODE,
-                      ME.SIG_TYPE AS SIG_TYPE
-                    FROM INTERPRO.MATCH MA
-                      INNER JOIN INTERPRO.METHOD ME 
-                        ON MA.METHOD_AC = ME.METHOD_AC
-                    UNION ALL
-                    SELECT
-                      FM.PROTEIN_AC AS PROTEIN_AC,
-                      FM.METHOD_AC AS METHOD_AC,
-                      FM.METHOD_AC AS MODEL_AC,
-                      FM.POS_FROM AS POS_FROM,
-                      FM.POS_TO AS POS_TO,
-                      NULL AS FRAGMENTS,
-                      FM.DBCODE AS M_DBCODE,
-                      ME.SIG_TYPE AS SIG_TYPE
-                    FROM INTERPRO.FEATURE_MATCH FM
-                      INNER JOIN INTERPRO.METHOD ME 
-                        ON FM.METHOD_AC = ME.METHOD_AC
-                    WHERE FM.DBCODE = 'g'
-                    UNION ALL            
-                    SELECT
-                      ME.PROTEIN_AC AS PROTEIN_AC,
-                      ME.CODE AS METHOD_AC,
-                      ME.CODE AS MODEL_AC,
-                      ME.POS_FROM AS POS_FROM,
-                      ME.POS_TO AS POS_TO,
-                      NULL AS FRAGMENTS,
-                      'm' AS M_DBCODE,
-                      NULL AS SIG_TYPE
-                    FROM INTERPRO.MEROPS ME        
-                ) M
-                INNER JOIN INTERPRO.PROTEIN P 
-                  ON M.PROTEIN_AC = P.PROTEIN_AC
-                INNER JOIN INTERPRO.ETAXI E 
-                  ON P.TAX_ID = E.TAX_ID
-                INNER JOIN {}.PROTEIN_DESC PD 
-                  ON M.PROTEIN_AC = PD.PROTEIN_AC
-                ORDER BY M.PROTEIN_AC
-                """.format(schema)
+                SELECT
+                  MA.PROTEIN_AC,
+                  MA.METHOD_AC,
+                  MA.MODEL_AC,
+                  MA.POS_FROM,
+                  MA.POS_TO,
+                  MA.FRAGMENTS,
+                  MA.DBCODE,
+                  ME.SIG_TYPE,
+                  P.LEN,
+                  P.FRAGMENT,
+                  P.DBCODE,
+                  PD.DESC_ID,
+                  NVL(E.LEFT_NUMBER, 0)
+                FROM INTERPRO.MATCH MA
+                  INNER JOIN INTERPRO.METHOD ME
+                    ON MA.METHOD_AC = ME.METHOD_AC
+                  INNER JOIN INTERPRO.PROTEIN P
+                    ON MA.PROTEIN_AC = P.PROTEIN_AC
+                  INNER JOIN INTERPRO.ETAXI E
+                    ON P.TAX_ID = E.TAX_ID
+                  INNER JOIN {}.PROTEIN_DESC PD
+                    ON MA.PROTEIN_AC = PD.PROTEIN_AC
+                ORDER BY MA.PROTEIN_AC
+        """
 
         for row in src.get(query):
             yield row
@@ -1156,7 +1131,6 @@ def load_matches(dsn, schema, **kwargs):
     # Taxon left number
     left_num = None
     n_proteins = 0
-    n_matches = 0
     chunk = []
     for row in iter_matches(filepath if filepath else con, schema):
         protein_acc = row[0]
@@ -1230,7 +1204,6 @@ def load_matches(dsn, schema, **kwargs):
                 matches
             )
             con.commit()
-            n_matches += len(matches)
             matches = []
 
         """
@@ -1242,7 +1215,7 @@ def load_matches(dsn, schema, **kwargs):
 
             * all PANTHER signatures, almost all PRINTS signatures
         """
-        if is_fragment or method_dbcode == 'g':
+        if is_fragment:
             continue
         elif method_dbcode not in ('F', 'V'):
             matches_agg.append((method_acc, start, end))
@@ -1292,7 +1265,6 @@ def load_matches(dsn, schema, **kwargs):
             matches
         )
         con.commit()
-        n_matches += len(matches)
         matches = []
 
     logging.info("{:>12} ({:.0f} proteins/sec)".format(
@@ -1300,13 +1272,35 @@ def load_matches(dsn, schema, **kwargs):
         n_proteins // (time.time() - ts)
     ))
 
-    # Triggers prediction/ METHOD2PROTEIN creating
+    # Triggers prediction/ METHOD2PROTEIN creation
     queue.put(None)
 
-    # In the meantime: index MATCH
+    # Add MobiDB-lite matches
     con.execute(
         """
-        CREATE INDEX I_MATCH$PROTEIN 
+        INSERT /*+APPEND*/ INTO {}.MATCH (
+            PROTEIN_AC, METHOD_AC, MODEL_AC,
+            POS_FROM, POS_TO, DBCODE, FRAGMENTS
+        )
+        SELECT
+          FM.PROTEIN_AC,
+          FM.METHOD_AC,
+          FM.METHOD_AC,
+          FM.POS_FROM,
+          FM.POS_TO,
+          FM.DBCODE,
+          NULL
+        FROM INTERPRO.FEATURE_MATCH FM
+        WHERE FM.DBCODE = 'g'
+        """.format(schema),
+        matches
+    )
+    con.commit()
+
+    # Index table
+    con.execute(
+        """
+        CREATE INDEX I_MATCH$PROTEIN
         ON {}.MATCH (PROTEIN_AC) NOLOGGING
         """.format(schema)
     )
@@ -1318,7 +1312,7 @@ def load_matches(dsn, schema, **kwargs):
     )
     con.optimize_table(schema, "MATCH", cascade=True)
     con.grant("SELECT", schema, "MATCH", "INTERPRO_SELECT")
-    logging.info("{} matches inserted".format(n_matches))
+    logging.info("MATCH table ready")
 
     consumer.join()
 
@@ -1338,13 +1332,13 @@ def report_description_changes(dsn, schema, output):
     con = Connection(dsn)
 
     """
-    Get descriptions for before update 
+    Get descriptions for before update
     (METHOD2SWISS_DE was populated during protein update)
     """
     query = """
         SELECT DISTINCT EM.ENTRY_AC, M.DESCRIPTION
         FROM {0}.METHOD2SWISS_DE M
-        INNER JOIN {0}.ENTRY2METHOD EM 
+        INNER JOIN {0}.ENTRY2METHOD EM
         ON M.METHOD_AC = EM.METHOD_AC
     """.format(schema)
     old_entries = {}
@@ -1361,7 +1355,7 @@ def report_description_changes(dsn, schema, output):
         INNER JOIN {0}.METHOD M ON MP.METHOD_AC = M.METHOD_AC
         INNER JOIN {0}.DESC_VALUE D ON MP.DESC_ID = D.DESC_ID
         INNER JOIN {0}.ENTRY2METHOD EM ON M.METHOD_AC = EM.METHOD_AC
-        WHERE MP.DBCODE = 'S' 
+        WHERE MP.DBCODE = 'S'
     """.format(schema)
     new_entries = {}
     for acc, text in con.get(query):
