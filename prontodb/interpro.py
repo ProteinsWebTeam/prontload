@@ -1162,7 +1162,7 @@ def load_matches(dsn, schema, **kwargs):
         protein_acc = row[0]
 
         if protein_acc != protein:
-            if protein is not None:
+            if protein:
                 for method_acc in methods:
                     # Merge matches
                     min_pos = None
@@ -1196,6 +1196,8 @@ def load_matches(dsn, schema, **kwargs):
                         n_proteins,
                         n_proteins // (time.time() - ts)
                     ))
+            else:
+                ts = time.time()
 
             protein = protein_acc
 
