@@ -1174,7 +1174,7 @@ def load_matches(dsn, schema, **kwargs):
                         if max_pos is None or end > max_pos:
                             max_pos = end
 
-                        matches_agg.append((method_acc, min_pos, max_pos))
+                    matches_agg.append((method_acc, min_pos, max_pos))
 
                 if matches_agg:
                     chunk.append((
@@ -1268,7 +1268,7 @@ def load_matches(dsn, schema, **kwargs):
             if max_pos is None or end > max_pos:
                 max_pos = end
 
-            matches_agg.append((method_acc, min_pos, max_pos))
+        matches_agg.append((method_acc, min_pos, max_pos))
 
     if matches_agg:
         chunk.append((
