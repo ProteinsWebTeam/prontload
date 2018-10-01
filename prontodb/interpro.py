@@ -1283,15 +1283,15 @@ def load_matches(dsn, schema, **kwargs):
             POS_FROM, POS_TO, DBCODE, FRAGMENTS
         )
         SELECT
-          FM.PROTEIN_AC,
-          FM.METHOD_AC,
-          FM.METHOD_AC,
-          FM.POS_FROM,
-          FM.POS_TO,
-          FM.DBCODE,
+          PROTEIN_AC,
+          METHOD_AC,
+          METHOD_AC,
+          POS_FROM,
+          POS_TO,
+          DBCODE,
           NULL
-        FROM INTERPRO.FEATURE_MATCH FM
-        WHERE FM.DBCODE = 'g'
+        FROM INTERPRO.FEATURE_MATCH
+        WHERE DBCODE = 'g'
         """.format(schema),
         matches
     )
