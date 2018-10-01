@@ -1082,7 +1082,7 @@ def iter_matches(src, schema):
 
 
 def load_matches(dsn, schema, **kwargs):
-    chunk_size = kwargs.get("chunk_size", 1000000)
+    chunk_size = kwargs.get("chunk_size", 100000)
     compress = kwargs.get("compress", True)
     max_gap = kwargs.get("max_gap", 20)
     filepath = kwargs.get("filepath")
