@@ -1071,7 +1071,7 @@ def iter_matches(src, schema):
                   INNER JOIN {}.PROTEIN_DESC PD
                     ON MA.PROTEIN_AC = PD.PROTEIN_AC
                 ORDER BY MA.PROTEIN_AC
-        """
+        """.format(schema)
 
         for row in src.get(query):
             yield row
