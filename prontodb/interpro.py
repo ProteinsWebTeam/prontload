@@ -1,11 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import bisect
 import gzip
 import json
 import logging
 import math
 import os
+import struct
 import time
 from multiprocessing import Process, Queue
 from tempfile import mkstemp
@@ -379,7 +381,20 @@ class ProteinConsumer(Process):
 
                 proteins.append(p)
 
-            files.append(self.dump(proteins, self.compress, self.tmpdir))
+            if self.compress:
+                _open = gzip.open
+                suffix = ".json.gz"
+            else:
+                _open = open
+                suffix = ".json"
+
+            fd, filepath = mkstemp(suffix=suffix, dir=self.tmpdir)
+            os.close(fd)
+
+            with _open(filepath, 'wt') as fh:
+                json.dump(proteins, fh)
+
+            files.append(filepath)
 
         logging.info("{} proteins ({} files, {} bytes)".format(
             n_proteins,
@@ -761,8 +776,25 @@ class ProteinConsumer(Process):
             """.format(self.schema)
         )
 
+        # Create buckets for method->taxa
+        n_buckets = 1000
+        _signatures = sorted([item[0] for item in signatures])
+        step = math.ceil(len(_signatures) / n_buckets)
+        signatures = []
+        buckets = []
+        for i in range(0, len(_signatures), step):
+            signatures.append(_signatures[i])
+
+            fd, filepath = mkstemp(dir=self.tmpdir)
+            os.close(fd)
+
+            buckets.append({
+                "file": filepath,
+                "signatures": {},
+                "count": 0
+            })
+
         # Populating METHOD2PROTEIN by loading files
-        methods = {}
         _open = gzip.open if self.compress else open
         for filepath in files:
             with _open(filepath, 'rt') as fh:
@@ -788,19 +820,33 @@ class ProteinConsumer(Process):
                         p["descr"]
                     ))
 
+                    i = bisect.bisect(signatures, method_ac)
+                    b = buckets[i-1]
+                    _signatures = b["signatures"]
+
                     # Counting the taxonomic origin of signatures
-                    if method_ac in methods:
-                        ranks = methods[method_ac]
+                    if method_ac in _signatures:
+                        ranks = _signatures[method_ac]
                     else:
-                        ranks = methods[method_ac] = {}
+                        ranks = _signatures[method_ac] = {}
 
                     for rank, tax_id in items:
                         if rank not in ranks:
                             ranks[rank] = {tax_id: 1}
+                            b["count"] += 1
                         elif tax_id not in ranks[rank]:
                             ranks[rank][tax_id] = 1
+                            b["count"] += 1
                         else:
                             ranks[rank][tax_id] += 1
+
+                    if b["count"] >= self.chunk_size:
+                        with open(b["file"], "ab") as fh:
+                            s = json.dumps(_signatures).encode("utf-8")
+                            fh.write(struct.pack("<I", len(s)) + s)
+
+                        b["signatures"] = {}
+                        b["count"] = 0
 
             for i in range(0, len(data), self.chunk_size):
                 con.executemany(
@@ -876,23 +922,54 @@ class ProteinConsumer(Process):
 
         # Populating METHOD_TAXA
         data = []
-        for method_ac, ranks in methods.items():
-            for rank, taxa in ranks.items():
-                for tax_id, count in taxa.items():
-                    data.append((method_ac, rank, tax_id, count))
+        for b in buckets:
+            signatures = b["signatures"]
 
-                    if len(data) == self.chunk_size:
-                        con.executemany(
-                            """
-                            INSERT /*+APPEND*/ INTO {}.METHOD_TAXA (
-                                METHOD_AC, RANK, TAX_ID, PROTEIN_COUNT
-                            )
-                            VALUES (:1, :2, :3, :4)
-                            """.format(self.schema),
-                            data
+            with open(b["file"], "rb") as fh:
+                while True:
+                    try:
+                        n_bytes, = struct.unpack("<I", fh.read(4))
+                    except struct.error:
+                        break
+                    else:
+                        _signatures = json.loads(
+                            fh.read(n_bytes).decode("utf-8")
                         )
-                        con.commit()
-                        data = []
+
+                        for acc in _signatures:
+                            if acc not in signatures:
+                                signatures[acc] = _signatures[acc]
+                                continue
+
+                            s = signatures[acc]
+                            for rank, taxa in _signatures[acc].items():
+                                if rank in s:
+                                    r = s[rank]
+                                else:
+                                    r = s[rank] = {}
+
+                                for tax_id, count in taxa.items():
+                                    if tax_id in r:
+                                        r[tax_id] += count
+                                    else:
+                                        r[tax_id] = count
+
+            for acc in signatures:
+                for rank, taxa in signatures[acc].items():
+                    for tax_id, count in taxa.items():
+                        data.append((acc, rank, tax_id, count))
+                        if len(data) == self.chunk_size:
+                            con.executemany(
+                                """
+                                INSERT /*+APPEND*/ INTO {}.METHOD_TAXA (
+                                    METHOD_AC, RANK, TAX_ID, PROTEIN_COUNT
+                                )
+                                VALUES (:1, :2, :3, :4)
+                                """.format(self.schema),
+                                data
+                            )
+                            con.commit()
+                            data = []
 
         if data:
             con.executemany(
@@ -1024,23 +1101,6 @@ class ProteinConsumer(Process):
             encoded = chars[remainder] + encoded
 
         return encoded
-
-    @staticmethod
-    def dump(data, compress=True, tmpdir=None):
-        if compress:
-            _open = gzip.open
-            suffix = ".json.gz"
-        else:
-            _open = open
-            suffix = ".json"
-
-        fd, filepath = mkstemp(suffix=suffix, dir=tmpdir)
-        os.close(fd)
-
-        with _open(filepath, 'wt') as fh:
-            json.dump(data, fh)
-
-        return filepath
 
 
 def iter_matches(src, schema):
