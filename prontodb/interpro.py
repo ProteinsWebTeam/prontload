@@ -1352,8 +1352,7 @@ def load_matches(dsn, schema, **kwargs):
           NULL
         FROM INTERPRO.FEATURE_MATCH
         WHERE DBCODE = 'g'
-        """.format(schema),
-        matches
+        """.format(schema)
     )
     con.commit()
 
