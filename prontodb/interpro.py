@@ -1207,8 +1207,6 @@ def load_matches(dsn, schema, **kwargs):
             matches = []
 
         """
-        MobiDB-lite: keep matches for MATCH table, but not for predictions
-
         PANTHER & PRINTS:
             Merge protein matches.
             If the signature is a family*, use the entire protein.
