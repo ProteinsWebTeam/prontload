@@ -42,7 +42,9 @@ def load_databases(dsn, schema):
 
     con.execute(
         """
-        INSERT /*+APPEND*/ INTO {}.CV_DATABASE (DBCODE, DBNAME, DBSHORT, VERSION, FILE_DATE)
+        INSERT /*+APPEND*/ INTO {}.CV_DATABASE (
+            DBCODE, DBNAME, DBSHORT, VERSION, FILE_DATE
+        )
         SELECT DB.DBCODE, DB.DBNAME, DB.DBSHORT, V.VERSION, V.FILE_DATE
         FROM INTERPRO.CV_DATABASE DB
         LEFT OUTER JOIN INTERPRO.DB_VERSION V ON DB.DBCODE = V.DBCODE
@@ -73,7 +75,9 @@ def load_signatures(dsn, schema):
 
     con.execute(
         """
-        INSERT /*+APPEND*/ INTO {}.METHOD (METHOD_AC, NAME, DBCODE, CANDIDATE, DESCRIPTION, SIG_TYPE)
+        INSERT /*+APPEND*/ INTO {}.METHOD (
+            METHOD_AC, NAME, DBCODE, CANDIDATE, DESCRIPTION, SIG_TYPE
+        )
         SELECT METHOD_AC, NAME, DBCODE, CANDIDATE, DESCRIPTION, SIG_TYPE
         FROM INTERPRO.METHOD
         """.format(schema)
@@ -550,22 +554,34 @@ class ProteinConsumer(Process):
 
                     """
                     Parent/Child relationships:
-                    The protein/matches made by the child entry must be a complete (>75%) subset of the parent entry
-                    if over(A) > 0.75, it means that A overlaps with B in at least 75% of its proteins or matches:
-                        A is a CHILD_OF B
+                    The protein/matches made by the child entry 
+                        must be a complete (>75%) subset of the parent entry
+                        
+                    if over(A) > 0.75, it means that A overlaps with B 
+                        in at least 75% of its proteins or matches:
+                            A is a CHILD_OF B
                     """
-                    over_1 = min(c['over'] / s_1['matches'], c['prot_over'] / s_1['proteins'])
-                    over_2 = min(c['over'] / s_2['matches'], c['prot_over'] / s_2['proteins'])
-
+                    over_1 = min(
+                        c['over'] / s_1['matches'],
+                        c['prot_over'] / s_1['proteins']
+                    )
+                    over_2 = min(
+                        c['over'] / s_2['matches'],
+                        c['prot_over'] / s_2['proteins']
+                    )
                     if len_1 >= 0.5 and len_2 >= 0.5:
-                        if over_1 > 0.75 and over_2 >= 0.75 and not extra_1 and not extra_2:
+                        if (over_1 > 0.75 and over_2 >= 0.75 and
+                                not extra_1 and not extra_2):
                             prediction = 'ADD_TO'
                         elif over_1 > 0.75 and not extra_1 and not adj_1:
                             prediction = 'CHILD_OF'
                         elif over_2 > 0.75 and not extra_2 and not adj_2:
                             prediction = 'PARENT_OF'  # acc2 child of acc1
                         elif len_1 >= 0.9:
-                            prediction = 'C/C' if len_2 >= 0.9 else 'CONTAINED_BY'
+                            if len_2 >= 0.9:
+                                prediction = 'C/C'
+                            else:
+                                prediction = 'CONTAINED_BY'
                         elif len_2 >= 0.9:
                             prediction = 'CONTAINER_OF'
                         else:
@@ -604,11 +620,16 @@ class ProteinConsumer(Process):
             """.format(self.schema)
         )
 
-        signatures = [(acc, s['matches'], s['proteins']) for acc, s in signatures.items()]
+        signatures = [
+            (acc, s['matches'], s['proteins'])
+            for acc, s in signatures.items()
+        ]
         for i in range(0, len(signatures), self.chunk_size):
             con.executemany(
                 """
-                INSERT /*+APPEND*/ INTO {}.METHOD_MATCH (METHOD_AC, N_MATCHES, N_PROT)
+                INSERT /*+APPEND*/ INTO {}.METHOD_MATCH (
+                    METHOD_AC, N_MATCHES, N_PROT
+                )
                 VALUES (:1, :2, :3)
                 """.format(self.schema),
                 signatures[i:i + self.chunk_size]
@@ -658,8 +679,10 @@ class ProteinConsumer(Process):
                     avg_frac1 = avg_frac2 = avg_over = 0
 
                 """
-                Cast to float as cx_Oracle 6.1 throws TypeError (expecting integer)
-                when the value of the 1st record is an integer (e.g. AVG_OVER=0)
+                Cast to float as cx_Oracle 6.1 throws TypeError 
+                    (expecting integer)
+                when the value of the 1st record is an integer 
+                    (e.g. AVG_OVER=0)
                 and the value for the second is not (e.g. AVG_OVER=25.6)
                 """
                 overlaps.append((
@@ -733,7 +756,8 @@ class ProteinConsumer(Process):
             """.format(self.schema)
         )
         con.optimize_table(self.schema, "METHOD_PREDICTION", cascade=True)
-        con.grant("SELECT", self.schema, "METHOD_PREDICTION", "INTERPRO_SELECT")
+        con.grant("SELECT", self.schema,
+                  "METHOD_PREDICTION", "INTERPRO_SELECT")
 
         # Get lineages
         ranks = {
@@ -1073,8 +1097,10 @@ class ProteinConsumer(Process):
         """
         offset = locations[0][0]
 
-        structure = []  # overall match structure
-        methods = []  # close signatures (less than max_gap between two positions)
+        # overall match structure
+        structure = []
+        # close signatures (less than max_gap between two positions)
+        methods = []
 
         for pos, method_ac in sorted(locations):
             if pos > offset + max_gap:
@@ -1474,7 +1500,7 @@ def report_description_changes(dsn, schema, output):
     with open(output, "wt") as fh:
         fh.write("Entry\tType\tChecked\t#Gained\t#Lost\tGained\tLost\n")
 
-        for e in sorted(entries.values(), key=lambda x: (0 if x["type"] == 'F' else 1, x["type"], x["acc"])):
+        for e in sorted(entries.values(), key=_get_entry_key):
             fh.write("{}\t{}\t{}\t{}\t{}\t{}\t{}\n".format(
                 e["acc"],
                 e["type"],
@@ -1484,3 +1510,10 @@ def report_description_changes(dsn, schema, output):
                 " | ".join(e["gained"]),
                 " | ".join(e["lost"])
             ))
+
+
+def _get_entry_key(entry):
+    if entry["type"] == "F":
+        return 0, entry["type"], entry["acc"]
+    else:
+        return 1, entry["type"], entry["acc"]
