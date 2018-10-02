@@ -813,7 +813,7 @@ class ProteinConsumer(Process):
 
             buckets.append({
                 "file": filepath,
-                "counts": {}
+                "signatures": {}
             })
 
         # Populating METHOD2PROTEIN by loading files
@@ -846,12 +846,12 @@ class ProteinConsumer(Process):
 
                     i = bisect.bisect(signatures, acc)
                     b = buckets[i-1]
-                    counts = b["counts"]
+                    _signatures = b["signatures"]
 
-                    if acc in counts:
-                        s = counts[acc]
+                    if acc in _signatures:
+                        s = _signatures[acc]
                     else:
-                        s = counts[acc] = {
+                        s = _signatures[acc] = {
                             "ranks": {},
                             "descriptions": {}
                         }
@@ -876,11 +876,11 @@ class ProteinConsumer(Process):
                         descriptions[dbcode][desc_id] += 1
 
             for b in buckets:
-                if b["counts"]:
+                if b["signatures"]:
                     with open(b["file"], "ab") as fh:
-                        s = json.dumps(b["counts"]).encode("utf-8")
+                        s = json.dumps(b["signatures"]).encode("utf-8")
                         fh.write(struct.pack("<I", len(s)) + s)
-                    b["counts"] = {}
+                    b["signatures"] = {}
 
             for i in range(0, len(data), self.chunk_size):
                 con.executemany(
@@ -965,7 +965,7 @@ class ProteinConsumer(Process):
         data1 = []
         data2 = []
         for b in buckets:
-            signatures = b["signatures"]
+            signatures = {}
 
             with open(b["file"], "rb") as fh:
                 while True:
