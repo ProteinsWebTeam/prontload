@@ -829,6 +829,7 @@ class ProteinConsumer(Process):
 
             data = []
             for p in proteins:
+                dbcode = p["dbcode"]
                 desc_id = p["descr"]
                 left_num = p["leftnum"]
                 items = list(
@@ -839,7 +840,7 @@ class ProteinConsumer(Process):
                     data.append((
                         method_ac,
                         p["acc"],
-                        p["dbcode"],
+                        dbcode,
                         p["code"],
                         p["length"],
                         left_num,
@@ -872,12 +873,17 @@ class ProteinConsumer(Process):
                         else:
                             ranks[rank][tax_id] += 1
 
-                    if desc_id in s["descriptions"]:
-                        s["descriptions"][desc_id] += 1
-                    else:
-                        s["descriptions"][desc_id] = 1
+                    descriptions = s["descriptions"]
+                    if dbcode not in descriptions:
+                        descriptions[dbcode] = {desc_id: 1}
                         b["count"] += 1
                         n_values += 1
+                    elif desc_id not in descriptions[dbcode]:
+                        descriptions[dbcode][desc_id] = 1
+                        b["count"] += 1
+                        n_values += 1
+                    else:
+                        descriptions[dbcode][desc_id] += 1
 
                     if self.max_values and n_values >= self.max_values:
                         with open(b["file"], "ab") as fh:
@@ -961,6 +967,7 @@ class ProteinConsumer(Process):
             CREATE TABLE {}.METHOD_DESC
             (
                 METHOD_AC VARCHAR2(25) NOT NULL,
+                DBCODE CHAR(1) NOT NULL,
                 DESC_ID NUMBER(10) NOT NULL,
                 PROTEIN_COUNT NUMBER(10) NOT NULL
             ) NOLOGGING
@@ -1003,11 +1010,17 @@ class ProteinConsumer(Process):
                                         r[tax_id] = count
 
                             descriptions = signatures[acc]["descriptions"]
-                            for desc_id, count in s["descriptions"].items():
-                                if desc_id in descriptions:
-                                    descriptions[desc_id] += count
+                            for dbcode, _db in s["descriptions"].items():
+                                if dbcode in descriptions:
+                                    db = descriptions[dbcode]
                                 else:
-                                    descriptions[desc_id] = count
+                                    db = descriptions[dbcode] = {}
+
+                                for desc_id, count in _db.items():
+                                    if desc_id in db:
+                                        db[desc_id] += count
+                                    else:
+                                        db[desc_id] = count
 
             for acc in signatures:
                 s = signatures[acc]
@@ -1026,18 +1039,19 @@ class ProteinConsumer(Process):
                             con.commit()
                             data1 = []
 
-                for desc_id, count in s["descriptions"].items():
-                    data2.append((acc, desc_id, count))
-                    if len(data2) == self.chunk_size:
-                        con.executemany(
-                            """
-                            INSERT /*+APPEND*/ INTO {}.METHOD_DESC
-                            VALUES (:1, :2, :3)
-                            """.format(self.schema),
-                            data2
-                        )
-                        con.commit()
-                        data2 = []
+                for dbcode, db in s["descriptions"].items():
+                    for desc_id, count in db.items():
+                        data2.append((acc, dbcode, desc_id, count))
+                        if len(data2) == self.chunk_size:
+                            con.executemany(
+                                """
+                                INSERT /*+APPEND*/ INTO {}.METHOD_DESC
+                                VALUES (:1, :2, :3, :4)
+                                """.format(self.schema),
+                                data2
+                            )
+                            con.commit()
+                            data2 = []
 
         if data1:
             con.executemany(
@@ -1053,7 +1067,7 @@ class ProteinConsumer(Process):
             con.executemany(
                 """
                 INSERT /*+APPEND*/ INTO {}.METHOD_DESC
-                VALUES (:1, :2, :3)
+                VALUES (:1, :2, :3, :4)
                 """.format(self.schema),
                 data2
             )
@@ -1070,7 +1084,7 @@ class ProteinConsumer(Process):
         con.execute(
             """
             CREATE INDEX METHOD_DESC
-            ON {}.METHOD_DESC (METHOD_AC)
+            ON {}.METHOD_DESC (METHOD_AC, DBCODE)
             NOLOGGING
             """.format(self.schema)
         )
