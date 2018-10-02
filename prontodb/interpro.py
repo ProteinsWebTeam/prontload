@@ -281,7 +281,6 @@ class ProteinConsumer(Process):
         self.chunk_size = kwargs.get("chunk_size", 100000)
         self.compress = kwargs.get("compress", True)
         self.n_buckets = kwargs.get("n_buckets", 1000)
-        self.max_values = kwargs.get("max_values", 0)
 
     def run(self):
         structures = {}
@@ -806,17 +805,15 @@ class ProteinConsumer(Process):
         step = math.ceil(len(_signatures) / self.n_buckets)
         signatures = []
         buckets = []
-        n_values = 0
         for i in range(0, len(_signatures), step):
             signatures.append(_signatures[i])
 
-            fd, filepath = mkstemp(dir=self.tmpdir)
+            fd, filepath = mkstemp(suffix=".dat", dir=self.tmpdir)
             os.close(fd)
 
             buckets.append({
                 "file": filepath,
-                "signatures": {},
-                "count": 0
+                "counts": {}
             })
 
         # Populating METHOD2PROTEIN by loading files
@@ -836,9 +833,9 @@ class ProteinConsumer(Process):
                     left_numbers.get(left_num, {"no rank": -1}).items()
                 )
 
-                for method_ac in p["signatures"]:
+                for acc in p["signatures"]:
                     data.append((
-                        method_ac,
+                        acc,
                         p["acc"],
                         dbcode,
                         p["code"],
@@ -847,52 +844,43 @@ class ProteinConsumer(Process):
                         desc_id
                     ))
 
-                    i = bisect.bisect(signatures, method_ac)
+                    i = bisect.bisect(signatures, acc)
                     b = buckets[i-1]
-                    _signatures = b["signatures"]
+                    counts = b["counts"]
 
-                    # Counting the taxonomic origin of signatures
-                    if method_ac in _signatures:
-                        s = _signatures[method_ac]
+                    if acc in counts:
+                        s = counts[acc]
                     else:
-                        s = _signatures[method_ac] = {
+                        s = counts[acc] = {
                             "ranks": {},
                             "descriptions": {}
                         }
 
+                    # Taxonomic origins
                     ranks = s["ranks"]
                     for rank, tax_id in items:
                         if rank not in ranks:
                             ranks[rank] = {tax_id: 1}
-                            b["count"] += 1
-                            n_values += 1
                         elif tax_id not in ranks[rank]:
                             ranks[rank][tax_id] = 1
-                            b["count"] += 1
-                            n_values += 1
                         else:
                             ranks[rank][tax_id] += 1
 
+                    # UniProt descriptions
                     descriptions = s["descriptions"]
                     if dbcode not in descriptions:
                         descriptions[dbcode] = {desc_id: 1}
-                        b["count"] += 1
-                        n_values += 1
                     elif desc_id not in descriptions[dbcode]:
                         descriptions[dbcode][desc_id] = 1
-                        b["count"] += 1
-                        n_values += 1
                     else:
                         descriptions[dbcode][desc_id] += 1
 
-                    if self.max_values and n_values >= self.max_values:
-                        with open(b["file"], "ab") as fh:
-                            s = json.dumps(_signatures).encode("utf-8")
-                            fh.write(struct.pack("<I", len(s)) + s)
-
-                        b["signatures"] = {}
-                        n_values -= b["count"]
-                        b["count"] = 0
+            for b in buckets:
+                if b["counts"]:
+                    with open(b["file"], "ab") as fh:
+                        s = json.dumps(b["counts"]).encode("utf-8")
+                        fh.write(struct.pack("<I", len(s)) + s)
+                    b["counts"] = {}
 
             for i in range(0, len(data), self.chunk_size):
                 con.executemany(
@@ -1021,6 +1009,8 @@ class ProteinConsumer(Process):
                                         db[desc_id] += count
                                     else:
                                         db[desc_id] = count
+
+            os.unlink(b["file"])
 
             for acc in signatures:
                 s = signatures[acc]
@@ -1255,8 +1245,7 @@ def load_matches(dsn, schema, **kwargs):
         tmpdir=kwargs.get("tmpdir"),
         compress=kwargs.get("compress", True),
         chunk_size=chunk_size,
-        n_buckets=kwargs.get("n_buckets", 1000),
-        max_values=kwargs.get("max_values", 0)
+        n_buckets=kwargs.get("n_buckets", 1000)
     )
     consumer.start()
 
