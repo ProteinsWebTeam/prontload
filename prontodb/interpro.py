@@ -995,6 +995,7 @@ class ProteinConsumer(Process):
 
         con.optimize_table(self.schema, "METHOD_TAXA", cascade=True)
         con.grant("SELECT", self.schema, "METHOD_TAXA", "INTERPRO_SELECT")
+        logging.info("{} terminated".format(self.name))
 
     @staticmethod
     def compare(matches):
@@ -1334,6 +1335,7 @@ def load_matches(dsn, schema, **kwargs):
     queue.put(None)
 
     # Add MobiDB-lite matches
+    logging.info("Adding MobiDB-lite matches")
     con.execute(
         """
         INSERT /*+APPEND*/ INTO {}.MATCH (
@@ -1356,6 +1358,7 @@ def load_matches(dsn, schema, **kwargs):
     con.commit()
 
     # Index table
+    logging.info("Indexing MATCH table")
     con.execute(
         """
         CREATE INDEX I_MATCH$PROTEIN
