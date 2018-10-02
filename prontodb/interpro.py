@@ -1360,27 +1360,28 @@ def load_matches(dsn, schema, **kwargs):
     # Triggers prediction/ METHOD2PROTEIN creation
     queue.put(None)
 
-    # Add MobiDB-lite matches
-    logging.info("Adding MobiDB-lite matches")
-    con.execute(
-        """
-        INSERT /*+APPEND*/ INTO {}.MATCH (
-            PROTEIN_AC, METHOD_AC, MODEL_AC,
-            POS_FROM, POS_TO, DBCODE, FRAGMENTS
+    if not limit:
+        # Add MobiDB-lite matches
+        logging.info("Adding MobiDB-lite matches")
+        con.execute(
+            """
+            INSERT /*+APPEND*/ INTO {}.MATCH (
+                PROTEIN_AC, METHOD_AC, MODEL_AC,
+                POS_FROM, POS_TO, DBCODE, FRAGMENTS
+            )
+            SELECT
+              PROTEIN_AC,
+              METHOD_AC,
+              METHOD_AC,
+              POS_FROM,
+              POS_TO,
+              DBCODE,
+              NULL
+            FROM INTERPRO.FEATURE_MATCH
+            WHERE DBCODE = 'g'
+            """.format(schema)
         )
-        SELECT
-          PROTEIN_AC,
-          METHOD_AC,
-          METHOD_AC,
-          POS_FROM,
-          POS_TO,
-          DBCODE,
-          NULL
-        FROM INTERPRO.FEATURE_MATCH
-        WHERE DBCODE = 'g'
-        """.format(schema)
-    )
-    con.commit()
+        con.commit()
 
     # Index table
     logging.info("Indexing MATCH table")
