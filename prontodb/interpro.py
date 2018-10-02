@@ -271,16 +271,17 @@ def load_proteins(dsn, schema):
 
 
 class ProteinConsumer(Process):
-    def __init__(self, dsn, schema, max_gap, connection,
-                 tmpdir=None, chunk_size=100000, compress=True):
+    def __init__(self, dsn, schema, max_gap, connection, **kwargs):
         super().__init__()
         self.dsn = dsn
         self.schema = schema
         self.max_gap = max_gap
         self.connection = connection
-        self.tmpdir = tmpdir
-        self.chunk_size = chunk_size
-        self.compress = compress
+        self.tmpdir = kwargs.get("tmpdir")
+        self.chunk_size = kwargs.get("chunk_size", 100000)
+        self.compress = kwargs.get("compress", True)
+        self.n_buckets = kwargs.get("n_buckets", 1000)
+        self.max_values = kwargs.get("max_values", 0)
 
     def run(self):
         structures = {}
@@ -295,7 +296,7 @@ class ProteinConsumer(Process):
                 break
 
             proteins = []
-            for accession, dbcode, l, descr_id, left_num, matches in task:
+            for accession, dbcode, l, desc_id, left_num, matches in task:
                 _structure = self.condense(matches, self.max_gap)
                 _signatures, _comparisons = self.compare(matches)
 
@@ -310,7 +311,7 @@ class ProteinConsumer(Process):
                     "acc": accession,
                     "dbcode": dbcode,
                     "length": l,
-                    "descr": descr_id,
+                    "descr": desc_id,
                     "leftnum": left_num,
                     "code": code,
                     "signatures": []
@@ -801,11 +802,11 @@ class ProteinConsumer(Process):
         )
 
         # Create buckets for method->taxa
-        n_buckets = 1000
         _signatures = sorted([item[0] for item in signatures])
-        step = math.ceil(len(_signatures) / n_buckets)
+        step = math.ceil(len(_signatures) / self.n_buckets)
         signatures = []
         buckets = []
+        n_values = 0
         for i in range(0, len(_signatures), step):
             signatures.append(_signatures[i])
 
@@ -828,6 +829,7 @@ class ProteinConsumer(Process):
 
             data = []
             for p in proteins:
+                desc_id = p["descr"]
                 left_num = p["leftnum"]
                 items = list(
                     left_numbers.get(left_num, {"no rank": -1}).items()
@@ -841,7 +843,7 @@ class ProteinConsumer(Process):
                         p["code"],
                         p["length"],
                         left_num,
-                        p["descr"]
+                        desc_id
                     ))
 
                     i = bisect.bisect(signatures, method_ac)
@@ -850,26 +852,40 @@ class ProteinConsumer(Process):
 
                     # Counting the taxonomic origin of signatures
                     if method_ac in _signatures:
-                        ranks = _signatures[method_ac]
+                        s = _signatures[method_ac]
                     else:
-                        ranks = _signatures[method_ac] = {}
+                        s = _signatures[method_ac] = {
+                            "ranks": {},
+                            "descriptions": {}
+                        }
 
+                    ranks = s["ranks"]
                     for rank, tax_id in items:
                         if rank not in ranks:
                             ranks[rank] = {tax_id: 1}
                             b["count"] += 1
+                            n_values += 1
                         elif tax_id not in ranks[rank]:
                             ranks[rank][tax_id] = 1
                             b["count"] += 1
+                            n_values += 1
                         else:
                             ranks[rank][tax_id] += 1
 
-                    if b["count"] >= self.chunk_size:
+                    if desc_id in s["descriptions"]:
+                        s["descriptions"][desc_id] += 1
+                    else:
+                        s["descriptions"][desc_id] = 1
+                        b["count"] += 1
+                        n_values += 1
+
+                    if self.max_values and n_values >= self.max_values:
                         with open(b["file"], "ab") as fh:
                             s = json.dumps(_signatures).encode("utf-8")
                             fh.write(struct.pack("<I", len(s)) + s)
 
                         b["signatures"] = {}
+                        n_values -= b["count"]
                         b["count"] = 0
 
             for i in range(0, len(data), self.chunk_size):
@@ -884,10 +900,6 @@ class ProteinConsumer(Process):
                     data[i:i + self.chunk_size]
                 )
                 con.commit()
-
-            # Can I haz some memory back?
-            proteins = None
-            data = None
 
         # Optimizing METHOD2PROTEIN
         con.execute(
@@ -929,8 +941,8 @@ class ProteinConsumer(Process):
         con.optimize_table(self.schema, "METHOD2PROTEIN", cascade=True)
         con.grant("SELECT", self.schema, "METHOD2PROTEIN", "INTERPRO_SELECT")
 
-        # Creating METHOD_TAXA
-        logging.info("creating METHOD_TAXA table")
+        # Insert signature counts
+        logging.info("creating counts tables")
         con.drop_table(self.schema, "METHOD_TAXA")
         con.execute(
             """
@@ -943,9 +955,20 @@ class ProteinConsumer(Process):
             ) NOLOGGING
             """.format(self.schema)
         )
+        con.drop_table(self.schema, "METHOD_DESC")
+        con.execute(
+            """
+            CREATE TABLE {}.METHOD_DESC
+            (
+                METHOD_AC VARCHAR2(25) NOT NULL,
+                DESC_ID NUMBER(10) NOT NULL,
+                PROTEIN_COUNT NUMBER(10) NOT NULL
+            ) NOLOGGING
+            """.format(self.schema)
+        )
 
-        # Populating METHOD_TAXA
-        data = []
+        data1 = []
+        data2 = []
         for b in buckets:
             signatures = b["signatures"]
 
@@ -961,16 +984,17 @@ class ProteinConsumer(Process):
                         )
 
                         for acc in _signatures:
+                            s = _signatures[acc]
                             if acc not in signatures:
-                                signatures[acc] = _signatures[acc]
+                                signatures[acc] = s
                                 continue
 
-                            s = signatures[acc]
-                            for rank, taxa in _signatures[acc].items():
-                                if rank in s:
-                                    r = s[rank]
+                            ranks = signatures[acc]["ranks"]
+                            for rank, taxa in s["ranks"].items():
+                                if rank in ranks:
+                                    r = ranks[rank]
                                 else:
-                                    r = s[rank] = {}
+                                    r = ranks[rank] = {}
 
                                 for tax_id, count in taxa.items():
                                     if tax_id in r:
@@ -978,37 +1002,64 @@ class ProteinConsumer(Process):
                                     else:
                                         r[tax_id] = count
 
+                            descriptions = signatures[acc]["descriptions"]
+                            for desc_id, count in s["descriptions"].items():
+                                if desc_id in descriptions:
+                                    descriptions[desc_id] += count
+                                else:
+                                    descriptions[desc_id] = count
+
             for acc in signatures:
-                for rank, taxa in signatures[acc].items():
+                s = signatures[acc]
+
+                for rank, taxa in s["ranks"].items():
                     for tax_id, count in taxa.items():
-                        data.append((acc, rank, tax_id, count))
-                        if len(data) == self.chunk_size:
+                        data1.append((acc, rank, tax_id, count))
+                        if len(data1) == self.chunk_size:
                             con.executemany(
                                 """
-                                INSERT /*+APPEND*/ INTO {}.METHOD_TAXA (
-                                    METHOD_AC, RANK, TAX_ID, PROTEIN_COUNT
-                                )
+                                INSERT /*+APPEND*/ INTO {}.METHOD_TAXA
                                 VALUES (:1, :2, :3, :4)
                                 """.format(self.schema),
-                                data
+                                data1
                             )
                             con.commit()
-                            data = []
+                            data1 = []
 
-        if data:
+                for desc_id, count in s["descriptions"].items():
+                    data2.append((acc, desc_id, count))
+                    if len(data2) == self.chunk_size:
+                        con.executemany(
+                            """
+                            INSERT /*+APPEND*/ INTO {}.METHOD_DESC
+                            VALUES (:1, :2, :3)
+                            """.format(self.schema),
+                            data2
+                        )
+                        con.commit()
+                        data2 = []
+
+        if data1:
             con.executemany(
                 """
-                INSERT /*+APPEND*/ INTO {}.METHOD_TAXA (
-                    METHOD_AC, RANK, TAX_ID, PROTEIN_COUNT
-                )
+                INSERT /*+APPEND*/ INTO {}.METHOD_TAXA
                 VALUES (:1, :2, :3, :4)
                 """.format(self.schema),
-                data
+                data1
             )
             con.commit()
-            data = []
 
-        # Optimizing METHOD_TAXA
+        if data2:
+            con.executemany(
+                """
+                INSERT /*+APPEND*/ INTO {}.METHOD_DESC
+                VALUES (:1, :2, :3)
+                """.format(self.schema),
+                data2
+            )
+            con.commit()
+
+        # Optimizing
         con.execute(
             """
             CREATE INDEX I_METHOD_TAXA
@@ -1016,9 +1067,20 @@ class ProteinConsumer(Process):
             NOLOGGING
             """.format(self.schema)
         )
+        con.execute(
+            """
+            CREATE INDEX METHOD_DESC
+            ON {}.METHOD_DESC (METHOD_AC)
+            NOLOGGING
+            """.format(self.schema)
+        )
 
         con.optimize_table(self.schema, "METHOD_TAXA", cascade=True)
         con.grant("SELECT", self.schema, "METHOD_TAXA", "INTERPRO_SELECT")
+
+        con.optimize_table(self.schema, "METHOD_DESC", cascade=True)
+        con.grant("SELECT", self.schema, "METHOD_DESC", "INTERPRO_SELECT")
+
         logging.info("{} terminated".format(self.name))
 
     @staticmethod
@@ -1170,16 +1232,17 @@ def iter_matches(src, schema):
 
 def load_matches(dsn, schema, **kwargs):
     chunk_size = kwargs.get("chunk_size", 100000)
-    compress = kwargs.get("compress", True)
     max_gap = kwargs.get("max_gap", 20)
     filepath = kwargs.get("filepath")
     limit = kwargs.get("limit", 0)
-    tmpdir = kwargs.get("tmpdir")
-
     queue = Queue()
     consumer = ProteinConsumer(
         dsn, schema, max_gap, queue,
-        tmpdir=tmpdir, compress=compress
+        tmpdir=kwargs.get("tmpdir"),
+        compress=kwargs.get("compress", True),
+        chunk_size=chunk_size,
+        n_buckets=kwargs.get("n_buckets", 1000),
+        max_values=kwargs.get("max_values", 0)
     )
     consumer.start()
 
@@ -1214,7 +1277,7 @@ def load_matches(dsn, schema, **kwargs):
     # Sequence length
     length = None
     # Description ID
-    descr_id = None
+    desc_id = None
     # Taxon left number
     left_num = None
     n_proteins = 0
@@ -1240,7 +1303,7 @@ def load_matches(dsn, schema, **kwargs):
                 if matches_agg:
                     chunk.append((
                         protein, prot_dbcode, length,
-                        descr_id, left_num, matches_agg
+                        desc_id, left_num, matches_agg
                     ))
 
                     if len(chunk) == chunk_size:
@@ -1272,7 +1335,7 @@ def load_matches(dsn, schema, **kwargs):
         length = math.floor(row[8])
         is_fragment = row[9] == 'Y'
         prot_dbcode = row[10]
-        descr_id = row[11]
+        desc_id = row[11]
         left_num = row[12]
 
         matches.append((
@@ -1331,7 +1394,7 @@ def load_matches(dsn, schema, **kwargs):
     if matches_agg:
         chunk.append((
             protein, prot_dbcode, length,
-            descr_id, left_num, matches_agg
+            desc_id, left_num, matches_agg
         ))
 
     if chunk:
