@@ -1321,6 +1321,9 @@ def load_matches(dsn, schema, **kwargs):
                         n_proteins // (time.time() - ts)
                     ))
             else:
+                logging.info(
+                    "query took {:.0f} seconds".format(time.time()-ts)
+                )
                 ts = time.time()
 
             protein = protein_acc
