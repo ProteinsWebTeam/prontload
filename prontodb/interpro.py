@@ -1239,7 +1239,7 @@ def load_matches(dsn, schema, **kwargs):
     max_gap = kwargs.get("max_gap", 20)
     filepath = kwargs.get("filepath")
     limit = kwargs.get("limit", 0)
-    queue = Queue()
+    queue = Queue(kwargs.get("queue_size", 0))
     consumer = ProteinConsumer(
         dsn, schema, max_gap, queue,
         tmpdir=kwargs.get("tmpdir"),
