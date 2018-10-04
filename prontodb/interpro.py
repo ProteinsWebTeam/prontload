@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 
 import bisect
-import gzip
 import json
 import logging
 import math
@@ -271,64 +270,157 @@ def load_proteins(dsn, schema):
 
 
 class ProteinConsumer(Process):
-    def __init__(self, dsn, schema, max_gap, connection, **kwargs):
+    def __init__(self, dsn, schema, max_gap, queue, **kwargs):
         super().__init__()
         self.dsn = dsn
         self.schema = schema
         self.max_gap = max_gap
-        self.connection = connection
+        self.queue = queue
         self.tmpdir = kwargs.get("tmpdir")
         self.chunk_size = kwargs.get("chunk_size", 100000)
-        self.compress = kwargs.get("compress", True)
         self.n_buckets = kwargs.get("n_buckets", 1000)
 
     def run(self):
+        con = Connection(self.dsn)
+
+        """
+        Get candidate signatures from DB
+        (and non-PROSITE Pattern candidates)
+        """
+        candidates = set()
+        non_prosite_candidates = set()
+        query = """
+            SELECT METHOD_AC, DBCODE
+            FROM INTERPRO.METHOD
+            WHERE CANDIDATE = 'Y'
+        """
+        for accession, dbcode in con.get(query):
+            candidates.add(accession)
+            if dbcode != 'P':
+                non_prosite_candidates.add(accession)
+
+        # Get lineages for the METHOD_TAXA table
+        ranks = {
+            "superkingdom", "kingdom", "phylum", "class", "order",
+            "family", "genus", "species"
+        }
+        left_numbers = {}
+        query = """
+            SELECT RANK, LEFT_NUMBER, TAX_ID
+            FROM {}.LINEAGE
+        """.format(self.schema)
+        for rank, left_num, tax_id in con.get(query):
+            if rank not in ranks:
+                continue
+            elif left_num not in left_numbers:
+                left_numbers[left_num] = {}
+            left_numbers[left_num][rank] = tax_id
+
+        # Get all signatures for buckets
+        query = """
+            SELECT METHOD_AC
+            FROM {}.METHOD
+            ORDER BY METHOD_AC
+        """.format(self.schema)
+        signatures = [row[0] for row in con.get(query)]
+
+        # Create buckets
+        step = math.ceil(len(signatures) / self.n_buckets)
+        buckets_acc = []
+        buckets = []
+        for i in range(0, len(signatures), step):
+            fd, filepath = mkstemp(dir=self.tmpdir)
+            os.close(fd)
+
+            buckets_acc.append(signatures[i])
+            buckets.append({
+                "file": filepath,
+                "signatures": {}
+            })
+
+        logging.info("creating METHOD2PROTEIN")
+        con.drop_table(self.schema, "METHOD2PROTEIN")
+        con.execute(
+            """
+            CREATE TABLE {}.METHOD2PROTEIN
+            (
+                METHOD_AC VARCHAR2(25) NOT NULL,
+                PROTEIN_AC VARCHAR2(15) NOT NULL,
+                DBCODE CHAR(1) NOT NULL,
+                CONDENSE VARCHAR(100) NOT NULL,
+                LEN NUMBER(5) NOT NULL,
+                LEFT_NUMBER NUMBER NOT NULL,
+                DESC_ID NUMBER(10) NOT NULL
+            ) NOLOGGING
+            """.format(self.schema)
+        )
+
         structures = {}
         signatures = {}
         comparisons = {}
-        n_proteins = 0
-        files = []
-
         while True:
-            task = self.connection.get()
+            task = self.queue.get()
             if task is None:
                 break
 
-            proteins = []
-            for accession, dbcode, l, desc_id, left_num, matches in task:
+            data = []
+            for protein_ac, dbcode, length, desc_id, left_num, matches in task:
                 _structure = self.condense(matches, self.max_gap)
                 _signatures, _comparisons = self.compare(matches)
 
-                # struct: condensed match structure of the protein
+                ranks = left_numbers.get(left_num, {"no rank": -1})
+
+                # _structure: condensed match structure of the protein
                 if _structure in structures:
                     code = structures[_structure]
                 else:
                     code = self.base36encode(len(structures) + 1)
                     structures[_structure] = code
 
-                p = {
-                    "acc": accession,
-                    "dbcode": dbcode,
-                    "length": l,
-                    "descr": desc_id,
-                    "leftnum": left_num,
-                    "code": code,
-                    "signatures": []
-                }
-                n_proteins += 1
+                # For Signature-UniProt description counts
+                dbx = 0 if dbcode == "S" else 1
 
                 # _signatures: num of matches per signature
-                for acc, n_matches in _signatures:
-                    p["signatures"].append(acc)
+                for method_ac, n_matches in _signatures:
+                    data.append((
+                        method_ac, protein_ac, dbcode,
+                        code, length, left_num, desc_id
+                    ))
 
-                    if acc not in signatures:
-                        signatures[acc] = {
+                    if method_ac not in signatures:
+                        signatures[method_ac] = {
                             "proteins": 0,
                             "matches": 0
                         }
 
-                    signatures[acc]["proteins"] += 1
-                    signatures[acc]["matches"] += n_matches
+                    signatures[method_ac]["proteins"] += 1
+                    signatures[method_ac]["matches"] += n_matches
+
+                    i = bisect.bisect(signatures, method_ac)
+                    b = buckets[i - 1]
+
+                    if method_ac in b["signatures"]:
+                        s = b["signatures"][method_ac]
+                    else:
+                        s = b["signatures"][method_ac] = {
+                            "ranks": {},
+                            "names": {}
+                        }
+
+                    # Taxonomic origins
+                    for rank, tax_id in ranks.items():
+                        if rank not in s["ranks"]:
+                            s["ranks"][rank] = {tax_id: 1}
+                        elif tax_id not in s["ranks"][rank]:
+                            s["ranks"][rank][tax_id] = 1
+                        else:
+                            s["ranks"][rank][tax_id] += 1
+
+                    # UniProt descriptions
+                    if desc_id not in s["names"]:
+                        s["names"][desc_id] = [0, 0]
+
+                    s["names"][desc_id][dbx] += 1
 
                 # _comparisons: match overlaps between signatures
                 collocations = set()
@@ -383,47 +475,26 @@ class ProteinConsumer(Process):
                             overlaps.add(acc)
                             comp['prot_over'] += 1
 
-                proteins.append(p)
+            for i in range(0, len(data), self.chunk_size):
+                con.executemany(
+                    """
+                    INSERT /*+APPEND*/ INTO {}.METHOD2PROTEIN (
+                        METHOD_AC, PROTEIN_AC, DBCODE,
+                        CONDENSE, LEN, LEFT_NUMBER, DESC_ID
+                    )
+                    VALUES (:1, :2, :3, :4, :5, :6, :7)
+                    """.format(self.schema),
+                    data[i:i + self.chunk_size]
+                )
+                con.commit()
 
-            if self.compress:
-                _open = gzip.open
-                suffix = ".json.gz"
-            else:
-                _open = open
-                suffix = ".json"
+            for b in buckets:
+                if b["signatures"]:
+                    with open(b["file"], "ab") as fh:
+                        s = json.dumps(b["signatures"]).encode("utf-8")
+                        fh.write(struct.pack("<I", len(s)) + s)
+                    b["signatures"] = {}
 
-            fd, filepath = mkstemp(suffix=suffix, dir=self.tmpdir)
-            os.close(fd)
-
-            with _open(filepath, 'wt') as fh:
-                json.dump(proteins, fh)
-
-            files.append(filepath)
-
-        logging.info("{} proteins ({} files, {} bytes)".format(
-            n_proteins,
-            len(files),
-            sum(map(os.path.getsize, files))
-        ))
-
-        """
-        Get candidate signatures from DB
-        (and non-PROSITE Pattern candidates)
-        """
-        con = Connection(self.dsn)
-        candidates = set()
-        non_prosite_candidates = set()
-        query = """
-            SELECT METHOD_AC, DBCODE
-            FROM INTERPRO.METHOD
-            WHERE CANDIDATE = 'Y'
-        """
-        for accession, dbcode in con.get(query):
-            candidates.add(accession)
-            if dbcode != 'P':
-                non_prosite_candidates.add(accession)
-
-        logging.info("making predictions")
         # Determine relations/adjacent
         relations = {}
         adjacents = {}
@@ -607,7 +678,7 @@ class ProteinConsumer(Process):
                     predictions.append((acc_2, acc_1, prediction))
 
         # Populating METHOD_MATCH
-        logging.info("creating METHOD_MATCH table")
+        logging.info("creating METHOD_MATCH")
         con.drop_table(self.schema, "METHOD_MATCH")
         con.execute(
             """
@@ -647,7 +718,7 @@ class ProteinConsumer(Process):
         con.grant("SELECT", self.schema, "METHOD_MATCH", "INTERPRO_SELECT")
 
         # Creating METHOD_OVERLAP
-        logging.info("creating METHOD_OVERLAP table")
+        logging.info("creating METHOD_OVERLAP")
         con.drop_table(self.schema, "METHOD_OVERLAP")
         con.execute(
             """
@@ -722,7 +793,7 @@ class ProteinConsumer(Process):
         con.grant("SELECT", self.schema, "METHOD_OVERLAP", "INTERPRO_SELECT")
 
         # Creating METHOD_PREDICTION
-        logging.info("creating METHOD_PREDICTION table")
+        logging.info("creating METHOD_PREDICTION")
         con.drop_table(self.schema, "METHOD_PREDICTION")
         con.execute(
             """
@@ -759,143 +830,8 @@ class ProteinConsumer(Process):
         con.grant("SELECT", self.schema,
                   "METHOD_PREDICTION", "INTERPRO_SELECT")
 
-        # Get lineages
-        ranks = {
-            "superkingdom",
-            "kingdom",
-            "phylum",
-            "class",
-            "order",
-            "family",
-            "genus",
-            "species"
-        }
-        left_numbers = {}
-        query = """
-            SELECT RANK, LEFT_NUMBER, TAX_ID
-            FROM {}.LINEAGE
-        """.format(self.schema)
-        for rank, left_num, tax_id in con.get(query):
-            if rank not in ranks:
-                continue
-            elif left_num not in left_numbers:
-                left_numbers[left_num] = {}
-            left_numbers[left_num][rank] = tax_id
-
-        # Creating METHOD2PROTEIN
-        logging.info("creating METHOD2PROTEIN table")
-        con.drop_table(self.schema, "METHOD2PROTEIN")
-        con.execute(
-            """
-            CREATE TABLE {}.METHOD2PROTEIN
-            (
-                METHOD_AC VARCHAR2(25) NOT NULL,
-                PROTEIN_AC VARCHAR2(15) NOT NULL,
-                DBCODE CHAR(1) NOT NULL,
-                CONDENSE VARCHAR(100) NOT NULL,
-                LEN NUMBER(5) NOT NULL,
-                LEFT_NUMBER NUMBER NOT NULL,
-                DESC_ID NUMBER(10) NOT NULL
-            ) NOLOGGING
-            """.format(self.schema)
-        )
-
-        # Create buckets for method->taxa
-        _signatures = sorted([item[0] for item in signatures])
-        step = math.ceil(len(_signatures) / self.n_buckets)
-        signatures = []
-        buckets = []
-        for i in range(0, len(_signatures), step):
-            signatures.append(_signatures[i])
-
-            fd, filepath = mkstemp(suffix=".dat", dir=self.tmpdir)
-            os.close(fd)
-
-            buckets.append({
-                "file": filepath,
-                "signatures": {}
-            })
-
-        # Populating METHOD2PROTEIN by loading files
-        _open = gzip.open if self.compress else open
-        for filepath in files:
-            with _open(filepath, 'rt') as fh:
-                proteins = json.load(fh)
-
-            os.unlink(filepath)
-
-            data = []
-            for p in proteins:
-                dbcode = p["dbcode"]
-                desc_id = p["descr"]
-                left_num = p["leftnum"]
-                items = list(
-                    left_numbers.get(left_num, {"no rank": -1}).items()
-                )
-
-                for acc in p["signatures"]:
-                    data.append((
-                        acc,
-                        p["acc"],
-                        dbcode,
-                        p["code"],
-                        p["length"],
-                        left_num,
-                        desc_id
-                    ))
-
-                    i = bisect.bisect(signatures, acc)
-                    b = buckets[i-1]
-                    _signatures = b["signatures"]
-
-                    if acc in _signatures:
-                        s = _signatures[acc]
-                    else:
-                        s = _signatures[acc] = {
-                            "ranks": {},
-                            "descriptions": {}
-                        }
-
-                    # Taxonomic origins
-                    ranks = s["ranks"]
-                    for rank, tax_id in items:
-                        if rank not in ranks:
-                            ranks[rank] = {tax_id: 1}
-                        elif tax_id not in ranks[rank]:
-                            ranks[rank][tax_id] = 1
-                        else:
-                            ranks[rank][tax_id] += 1
-
-                    # UniProt descriptions
-                    descriptions = s["descriptions"]
-                    if dbcode not in descriptions:
-                        descriptions[dbcode] = {desc_id: 1}
-                    elif desc_id not in descriptions[dbcode]:
-                        descriptions[dbcode][desc_id] = 1
-                    else:
-                        descriptions[dbcode][desc_id] += 1
-
-            for b in buckets:
-                if b["signatures"]:
-                    with open(b["file"], "ab") as fh:
-                        s = json.dumps(b["signatures"]).encode("utf-8")
-                        fh.write(struct.pack("<I", len(s)) + s)
-                    b["signatures"] = {}
-
-            for i in range(0, len(data), self.chunk_size):
-                con.executemany(
-                    """
-                    INSERT /*+APPEND*/ INTO {}.METHOD2PROTEIN (
-                        METHOD_AC, PROTEIN_AC, DBCODE,
-                        CONDENSE, LEN, LEFT_NUMBER, DESC_ID
-                    )
-                    VALUES (:1, :2, :3, :4, :5, :6, :7)
-                    """.format(self.schema),
-                    data[i:i + self.chunk_size]
-                )
-                con.commit()
-
         # Optimizing METHOD2PROTEIN
+        logging.info("optimizing METHOD2PROTEIN")
         con.execute(
             """
             ALTER TABLE {}.METHOD2PROTEIN
@@ -936,7 +872,19 @@ class ProteinConsumer(Process):
         con.grant("SELECT", self.schema, "METHOD2PROTEIN", "INTERPRO_SELECT")
 
         # Insert signature counts
-        logging.info("creating counts tables")
+        logging.info("creating METHOD_DESC and METHOD_TAXA")
+        con.drop_table(self.schema, "METHOD_DESC")
+        con.execute(
+            """
+            CREATE TABLE {}.METHOD_DESC
+            (
+                METHOD_AC VARCHAR2(25) NOT NULL,
+                DESC_ID NUMBER(10) NOT NULL,
+                REVIEWED_COUNT NUMBER(10) NOT NULL,
+                UNREVIEWED_COUNT NUMBER(10) NOT NULL
+            ) NOLOGGING
+            """.format(self.schema)
+        )
         con.drop_table(self.schema, "METHOD_TAXA")
         con.execute(
             """
@@ -949,22 +897,10 @@ class ProteinConsumer(Process):
             ) NOLOGGING
             """.format(self.schema)
         )
-        con.drop_table(self.schema, "METHOD_DESC")
-        con.execute(
-            """
-            CREATE TABLE {}.METHOD_DESC
-            (
-                METHOD_AC VARCHAR2(25) NOT NULL,
-                DBCODE CHAR(1) NOT NULL,
-                DESC_ID NUMBER(10) NOT NULL,
-                PROTEIN_COUNT NUMBER(10) NOT NULL
-            ) NOLOGGING
-            """.format(self.schema)
-        )
 
-        data1 = []
-        data2 = []
         for b in buckets:
+            data1 = []
+            data2 = []
             signatures = {}
 
             with open(b["file"], "rb") as fh:
@@ -979,17 +915,20 @@ class ProteinConsumer(Process):
                         )
 
                         for acc in _signatures:
-                            s = _signatures[acc]
-                            if acc not in signatures:
-                                signatures[acc] = s
+                            _s = _signatures[acc]
+                            if acc in signatures:
+                                s = signatures[acc]
+                            else:
+                                signatures[acc] = _s
                                 continue
 
-                            ranks = signatures[acc]["ranks"]
-                            for rank, taxa in s["ranks"].items():
-                                if rank in ranks:
-                                    r = ranks[rank]
+                            print(s)
+
+                            for rank, taxa in _s["ranks"].items():
+                                if rank in s["ranks"]:
+                                    r = s["ranks"][rank]
                                 else:
-                                    r = ranks[rank] = {}
+                                    r = s["ranks"][rank] = {}
 
                                 for tax_id, count in taxa.items():
                                     if tax_id in r:
@@ -997,73 +936,61 @@ class ProteinConsumer(Process):
                                     else:
                                         r[tax_id] = count
 
-                            descriptions = signatures[acc]["descriptions"]
-                            for dbcode, _db in s["descriptions"].items():
-                                if dbcode in descriptions:
-                                    db = descriptions[dbcode]
+                            for desc_id, counts in _s["names"].items():
+                                if desc_id in s["names"]:
+                                    s["names"][desc_id][0] += counts[0]
+                                    s["names"][desc_id][1] += counts[1]
                                 else:
-                                    db = descriptions[dbcode] = {}
+                                    s["names"][desc_id] = counts
 
-                                for desc_id, count in _db.items():
-                                    if desc_id in db:
-                                        db[desc_id] += count
-                                    else:
-                                        db[desc_id] = count
-
-            os.unlink(b["file"])
+            # TODO: remove after debug
+            # os.unlink(b["file"])
 
             for acc in signatures:
                 s = signatures[acc]
 
-                for rank, taxa in s["ranks"].items():
-                    for tax_id, count in taxa.items():
-                        data1.append((acc, rank, tax_id, count))
-                        if len(data1) == self.chunk_size:
-                            con.executemany(
-                                """
-                                INSERT /*+APPEND*/ INTO {}.METHOD_TAXA
-                                VALUES (:1, :2, :3, :4)
-                                """.format(self.schema),
-                                data1
-                            )
-                            con.commit()
-                            data1 = []
+                data1 += [
+                    (acc, rank, tax_id, count)
+                    for rank, taxa in s["ranks"].items()
+                    for tax_id, count in taxa.items()
+                ]
 
-                for dbcode, db in s["descriptions"].items():
-                    for desc_id, count in db.items():
-                        data2.append((acc, dbcode, desc_id, count))
-                        if len(data2) == self.chunk_size:
-                            con.executemany(
-                                """
-                                INSERT /*+APPEND*/ INTO {}.METHOD_DESC
-                                VALUES (:1, :2, :3, :4)
-                                """.format(self.schema),
-                                data2
-                            )
-                            con.commit()
-                            data2 = []
+                data2 += [
+                    (acc, desc_id, counts[0], counts[1])
+                    for desc_id, counts in s["names"].items()
+                ]
 
-        if data1:
-            con.executemany(
-                """
-                INSERT /*+APPEND*/ INTO {}.METHOD_TAXA
-                VALUES (:1, :2, :3, :4)
-                """.format(self.schema),
-                data1
-            )
-            con.commit()
+            for i in range(0, len(data1), self.chunk_size):
+                con.executemany(
+                    """
+                    INSERT /*+APPEND*/ INTO {}.METHOD_TAXA
+                    VALUES (:1, :2, :3, :4)
+                    """.format(self.schema),
+                    data1[i:i+self.chunk_size]
+                )
+                con.commit()
 
-        if data2:
-            con.executemany(
-                """
-                INSERT /*+APPEND*/ INTO {}.METHOD_DESC
-                VALUES (:1, :2, :3, :4)
-                """.format(self.schema),
-                data2
-            )
-            con.commit()
+            for i in range(0, len(data2), self.chunk_size):
+                con.executemany(
+                    """
+                    INSERT /*+APPEND*/ INTO {}.METHOD_DESC
+                    VALUES (:1, :2, :3, :4)
+                    """.format(self.schema),
+                    data2[i:i + self.chunk_size]
+                )
+                con.commit()
 
         # Optimizing
+        con.execute(
+            """
+            CREATE INDEX METHOD_DESC
+            ON {}.METHOD_DESC (METHOD_AC)
+            NOLOGGING
+            """.format(self.schema)
+        )
+        con.optimize_table(self.schema, "METHOD_DESC", cascade=True)
+        con.grant("SELECT", self.schema, "METHOD_DESC", "INTERPRO_SELECT")
+
         con.execute(
             """
             CREATE INDEX I_METHOD_TAXA
@@ -1071,19 +998,8 @@ class ProteinConsumer(Process):
             NOLOGGING
             """.format(self.schema)
         )
-        con.execute(
-            """
-            CREATE INDEX METHOD_DESC
-            ON {}.METHOD_DESC (METHOD_AC, DBCODE)
-            NOLOGGING
-            """.format(self.schema)
-        )
-
         con.optimize_table(self.schema, "METHOD_TAXA", cascade=True)
         con.grant("SELECT", self.schema, "METHOD_TAXA", "INTERPRO_SELECT")
-
-        con.optimize_table(self.schema, "METHOD_DESC", cascade=True)
-        con.grant("SELECT", self.schema, "METHOD_DESC", "INTERPRO_SELECT")
 
         logging.info("{} terminated".format(self.name))
 
@@ -1196,54 +1112,47 @@ class ProteinConsumer(Process):
         return encoded
 
 
-def iter_matches(src, schema):
-    if isinstance(src, Connection):
-        # Consider src is a Connection instance
-        query = """
-                SELECT
-                  MA.PROTEIN_AC,
-                  MA.METHOD_AC,
-                  MA.MODEL_AC,
-                  MA.POS_FROM,
-                  MA.POS_TO,
-                  MA.FRAGMENTS,
-                  MA.DBCODE,
-                  ME.SIG_TYPE,
-                  P.LEN,
-                  P.FRAGMENT,
-                  P.DBCODE,
-                  PD.DESC_ID,
-                  NVL(E.LEFT_NUMBER, 0)
-                FROM INTERPRO.MATCH MA
-                  INNER JOIN INTERPRO.METHOD ME
-                    ON MA.METHOD_AC = ME.METHOD_AC
-                  INNER JOIN INTERPRO.PROTEIN P
-                    ON MA.PROTEIN_AC = P.PROTEIN_AC
-                  INNER JOIN INTERPRO.ETAXI E
-                    ON P.TAX_ID = E.TAX_ID
-                  INNER JOIN {}.PROTEIN_DESC PD
-                    ON MA.PROTEIN_AC = PD.PROTEIN_AC
-                ORDER BY MA.PROTEIN_AC
-        """.format(schema)
+def iter_matches(con, schema):
+    query = """
+            SELECT
+              MA.PROTEIN_AC,
+              MA.METHOD_AC,
+              MA.MODEL_AC,
+              MA.POS_FROM,
+              MA.POS_TO,
+              MA.FRAGMENTS,
+              MA.DBCODE,
+              ME.SIG_TYPE,
+              P.LEN,
+              P.FRAGMENT,
+              P.DBCODE,
+              PD.DESC_ID,
+              NVL(E.LEFT_NUMBER, 0)
+            FROM INTERPRO.MATCH MA
+              INNER JOIN INTERPRO.METHOD ME
+                ON MA.METHOD_AC = ME.METHOD_AC
+              INNER JOIN INTERPRO.PROTEIN P
+                ON MA.PROTEIN_AC = P.PROTEIN_AC
+              INNER JOIN INTERPRO.ETAXI E
+                ON P.TAX_ID = E.TAX_ID
+              INNER JOIN {}.PROTEIN_DESC PD
+                ON MA.PROTEIN_AC = PD.PROTEIN_AC
+            ORDER BY MA.PROTEIN_AC
+    """.format(schema)
 
-        for row in src.get(query):
-            yield row
-    else:
-        with gzip.open(src, "rt") as fh:
-            for line in fh:
-                yield json.loads(line.rstrip())
+    for row in con.get(query):
+        yield row
 
 
 def load_matches(dsn, schema, **kwargs):
+    source = kwargs.get("source")
     chunk_size = kwargs.get("chunk_size", 100000)
     max_gap = kwargs.get("max_gap", 20)
-    filepath = kwargs.get("filepath")
     limit = kwargs.get("limit", 0)
     queue = Queue(kwargs.get("queue_size", 0))
     consumer = ProteinConsumer(
         dsn, schema, max_gap, queue,
         tmpdir=kwargs.get("tmpdir"),
-        compress=kwargs.get("compress", True),
         chunk_size=chunk_size,
         n_buckets=kwargs.get("n_buckets", 1000)
     )
@@ -1266,6 +1175,9 @@ def load_matches(dsn, schema, **kwargs):
         """.format(schema)
     )
 
+    if not source:
+        source = iter_matches(con, schema)
+
     ts = time.time()
     # matches to be inserted in the MATCH table
     matches = []
@@ -1285,7 +1197,7 @@ def load_matches(dsn, schema, **kwargs):
     left_num = None
     n_proteins = 0
     chunk = []
-    for row in iter_matches(filepath if filepath else con, schema):
+    for row in source:
         protein_acc = row[0]
 
         if protein_acc != protein:
