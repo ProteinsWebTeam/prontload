@@ -283,21 +283,36 @@ class ProteinConsumer(Process):
     def run(self):
         con = Connection(self.dsn)
 
-        """
-        Get candidate signatures from DB
-        (and non-PROSITE Pattern candidates)
-        """
+        # Get signatures
+        signatures = []
         candidates = set()
         non_prosite_candidates = set()
         query = """
-            SELECT METHOD_AC, DBCODE
-            FROM INTERPRO.METHOD
-            WHERE CANDIDATE = 'Y'
-        """
-        for accession, dbcode in con.get(query):
-            candidates.add(accession)
-            if dbcode != 'P':
-                non_prosite_candidates.add(accession)
+            SELECT METHOD_AC, DBCODE, CANDIDATE
+            FROM {}.METHOD
+            ORDER BY METHOD_AC 
+        """.format(self.schema)
+        for accession, dbcode, candidate in con.get(query):
+            signatures.append(accession)
+
+            if candidate == "Y":
+                candidates.add(accession)
+                if dbcode != 'P':
+                    non_prosite_candidates.add(accession)
+
+        # Create buckets
+        step = math.ceil(len(signatures) / self.n_buckets)
+        buckets_acc = []
+        buckets = []
+        for i in range(0, len(signatures), step):
+            fd, filepath = mkstemp(dir=self.tmpdir)
+            os.close(fd)
+
+            buckets_acc.append(signatures[i])
+            buckets.append({
+                "file": filepath,
+                "signatures": {}
+            })
 
         # Get lineages for the METHOD_TAXA table
         ranks = {
@@ -315,28 +330,6 @@ class ProteinConsumer(Process):
             elif left_num not in left_numbers:
                 left_numbers[left_num] = {}
             left_numbers[left_num][rank] = tax_id
-
-        # Get all signatures for buckets
-        query = """
-            SELECT METHOD_AC
-            FROM {}.METHOD
-            ORDER BY METHOD_AC
-        """.format(self.schema)
-        signatures = [row[0] for row in con.get(query)]
-
-        # Create buckets
-        step = math.ceil(len(signatures) / self.n_buckets)
-        buckets_acc = []
-        buckets = []
-        for i in range(0, len(signatures), step):
-            fd, filepath = mkstemp(dir=self.tmpdir)
-            os.close(fd)
-
-            buckets_acc.append(signatures[i])
-            buckets.append({
-                "file": filepath,
-                "signatures": {}
-            })
 
         logging.info("creating METHOD2PROTEIN")
         con.drop_table(self.schema, "METHOD2PROTEIN")
