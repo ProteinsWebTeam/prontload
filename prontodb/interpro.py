@@ -396,7 +396,7 @@ class ProteinConsumer(Process):
                     signatures[method_ac]["proteins"] += 1
                     signatures[method_ac]["matches"] += n_matches
 
-                    i = bisect.bisect(signatures, method_ac)
+                    i = bisect.bisect(buckets_acc, method_ac)
                     b = buckets[i - 1]
 
                     if method_ac in b["signatures"]:
