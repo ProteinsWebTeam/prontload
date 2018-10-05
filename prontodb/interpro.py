@@ -2,14 +2,14 @@
 # -*- coding: utf-8 -*-
 
 import bisect
-import json
 import logging
 import math
 import os
+import pickle
 import struct
 import time
-from multiprocessing import Process, Queue
-from tempfile import mkstemp
+from multiprocessing import Process, Queue, Pipe
+from tempfile import mkdtemp, mkstemp
 
 from .oracledb import Connection
 
@@ -351,6 +351,12 @@ class ProteinConsumer(Process):
         structures = {}
         signatures = {}
         comparisons = {}
+        insert_time = 0
+        bucketing_time = 0
+        count_time = 0
+        condense_time = 0
+        compare_time = 0
+        compare_time2 = 0
         while True:
             task = self.queue.get()
             if task is None:
@@ -358,8 +364,12 @@ class ProteinConsumer(Process):
 
             data = []
             for protein_ac, dbcode, length, desc_id, left_num, matches in task:
+                t = time.time()
                 _structure = self.condense(matches, self.max_gap)
+                condense_time += time.time() - t
+                t = time.time()
                 _signatures, _comparisons = self.compare(matches)
+                compare_time += time.time() - t
 
                 ranks = left_numbers.get(left_num, {"no rank": -1})
 
@@ -389,6 +399,7 @@ class ProteinConsumer(Process):
                     signatures[method_ac]["proteins"] += 1
                     signatures[method_ac]["matches"] += n_matches
 
+                    t = time.time()
                     i = bisect.bisect(buckets_acc, method_ac)
                     b = buckets[i - 1]
 
@@ -414,8 +425,10 @@ class ProteinConsumer(Process):
                         s["names"][desc_id] = [0, 0]
 
                     s["names"][desc_id][dbx] += 1
+                    count_time += time.time() - t
 
                 # _comparisons: match overlaps between signatures
+                t = time.time()
                 collocations = set()
                 overlaps = set()
                 for acc_1, len_1, acc_2, len_2, overlap in _comparisons:
@@ -468,6 +481,9 @@ class ProteinConsumer(Process):
                             overlaps.add(acc)
                             comp['prot_over'] += 1
 
+                compare_time2 += time.time() - t
+
+            t = time.time()
             for i in range(0, len(data), self.chunk_size):
                 con.executemany(
                     """
@@ -480,13 +496,28 @@ class ProteinConsumer(Process):
                     data[i:i + self.chunk_size]
                 )
                 con.commit()
+            insert_time += time.time() - t
 
+            t = time.time()
             for b in buckets:
                 if b["signatures"]:
                     with open(b["file"], "ab") as fh:
-                        s = json.dumps(b["signatures"]).encode("utf-8")
+                        s = pickle.dumps(b["signatures"])
                         fh.write(struct.pack("<I", len(s)) + s)
                     b["signatures"] = {}
+            bucketing_time += time.time() - t
+
+        logging.info("{} temporary files, {} bytes)".format(
+            len(buckets),
+            sum([os.path.getsize(b["file"]) for b in buckets])
+        ))
+
+        logging.info("insert:   {:>10.0f} seconds".format(insert_time))
+        logging.info("write:    {:>10.0f} seconds".format(bucketing_time))
+        logging.info("count:    {:>10.0f} seconds".format(count_time))
+        logging.info("condense: {:>10.0f} seconds".format(condense_time))
+        logging.info("compare:  {:>10.0f} seconds".format(compare_time))
+        logging.info("compare2: {:>10.0f} seconds".format(compare_time2))
 
         # Determine relations/adjacent
         relations = {}
@@ -832,20 +863,20 @@ class ProteinConsumer(Process):
             PRIMARY KEY (METHOD_AC, PROTEIN_AC)
             """.format(self.schema)
         )
-        con.execute(
-            """
-            CREATE INDEX I_METHOD2PROTEIN$M
-            ON {}.METHOD2PROTEIN (METHOD_AC)
-            NOLOGGING
-            """.format(self.schema)
-        )
-        con.execute(
-            """
-            CREATE INDEX I_METHOD2PROTEIN$P
-            ON {}.METHOD2PROTEIN (PROTEIN_AC)
-            NOLOGGING
-            """.format(self.schema)
-        )
+        # con.execute(
+        #     """
+        #     CREATE INDEX I_METHOD2PROTEIN$M
+        #     ON {}.METHOD2PROTEIN (METHOD_AC)
+        #     NOLOGGING
+        #     """.format(self.schema)
+        # )
+        # con.execute(
+        #     """
+        #     CREATE INDEX I_METHOD2PROTEIN$P
+        #     ON {}.METHOD2PROTEIN (PROTEIN_AC)
+        #     NOLOGGING
+        #     """.format(self.schema)
+        # )
         con.execute(
             """
             CREATE INDEX I_METHOD2PROTEIN$LN
@@ -903,9 +934,7 @@ class ProteinConsumer(Process):
                     except struct.error:
                         break
                     else:
-                        _signatures = json.loads(
-                            fh.read(n_bytes).decode("utf-8")
-                        )
+                        _signatures = pickle.loads(fh.read(n_bytes))
 
                         for acc in _signatures:
                             _s = _signatures[acc]
@@ -914,8 +943,6 @@ class ProteinConsumer(Process):
                             else:
                                 signatures[acc] = _s
                                 continue
-
-                            print(s)
 
                             for rank, taxa in _s["ranks"].items():
                                 if rank in s["ranks"]:
@@ -936,8 +963,7 @@ class ProteinConsumer(Process):
                                 else:
                                     s["names"][desc_id] = counts
 
-            # TODO: remove after debug
-            # os.unlink(b["file"])
+            os.remove(b["file"])
 
             for acc in signatures:
                 s = signatures[acc]
@@ -976,9 +1002,10 @@ class ProteinConsumer(Process):
         # Optimizing
         con.execute(
             """
-            CREATE INDEX METHOD_DESC
-            ON {}.METHOD_DESC (METHOD_AC)
-            NOLOGGING
+            ALTER TABLE {}.METHOD_DESC
+            ADD CONSTRAINT PK_METHOD_MATCH 
+            PRIMARY KEY (METHOD_AC, DESC_ID)
+            NOLOGGING 
             """.format(self.schema)
         )
         con.optimize_table(self.schema, "METHOD_DESC", cascade=True)
@@ -986,9 +1013,10 @@ class ProteinConsumer(Process):
 
         con.execute(
             """
-            CREATE INDEX I_METHOD_TAXA
-            ON {}.METHOD_TAXA (METHOD_AC, RANK)
-            NOLOGGING
+            ALTER TABLE {}.I_METHOD_TAXA
+            ADD CONSTRAINT PK_METHOD_TAXA 
+            PRIMARY KEY (METHOD_AC, RANK, TAX_ID)
+            NOLOGGING 
             """.format(self.schema)
         )
         con.optimize_table(self.schema, "METHOD_TAXA", cascade=True)
@@ -1143,15 +1171,18 @@ def load_matches(dsn, schema, **kwargs):
     max_gap = kwargs.get("max_gap", 20)
     limit = kwargs.get("limit", 0)
     queue = Queue(kwargs.get("queue_size", 0))
+    #conn1, conn2 = Pipe(False)
     consumer = ProteinConsumer(
         dsn, schema, max_gap, queue,
         tmpdir=kwargs.get("tmpdir"),
         chunk_size=chunk_size,
-        n_buckets=kwargs.get("n_buckets", 1000)
+        n_buckets=kwargs.get("buckets", 1000)
     )
     consumer.start()
 
     con = Connection(dsn)
+
+    logging.info("creating MATCH")
     con.drop_table(schema, "MATCH")
     con.execute(
         """
@@ -1190,6 +1221,7 @@ def load_matches(dsn, schema, **kwargs):
     left_num = None
     n_proteins = 0
     chunk = []
+    wait_time = 0
     for row in source:
         protein_acc = row[0]
 
@@ -1215,8 +1247,10 @@ def load_matches(dsn, schema, **kwargs):
                     ))
 
                     if len(chunk) == chunk_size:
+                        t = time.time()
                         queue.put(chunk)
                         chunk = []
+                        wait_time += time.time() - t
 
                 matches_agg = []
                 methods = {}
@@ -1230,7 +1264,7 @@ def load_matches(dsn, schema, **kwargs):
                     ))
             else:
                 logging.info(
-                    "query took {:.0f} seconds".format(time.time()-ts)
+                    "starting after {:.0f} seconds".format(time.time()-ts)
                 )
                 ts = time.time()
 
@@ -1309,8 +1343,10 @@ def load_matches(dsn, schema, **kwargs):
         ))
 
     if chunk:
+        t = time.time()
         queue.put(chunk)
         chunk = []
+        wait_time += time.time() - t
 
     if matches:
         con.executemany(
@@ -1326,9 +1362,10 @@ def load_matches(dsn, schema, **kwargs):
         con.commit()
         matches = []
 
-    logging.info("{:>12} ({:.0f} proteins/sec)".format(
+    logging.info("{:>12} ({:.0f} proteins/sec, waited {:.0f} seconds)".format(
         n_proteins,
-        n_proteins // (time.time() - ts)
+        n_proteins // (time.time() - ts),
+        wait_time
     ))
 
     # Triggers prediction/ METHOD2PROTEIN creation
