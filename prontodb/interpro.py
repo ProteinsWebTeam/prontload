@@ -1003,7 +1003,7 @@ class ProteinConsumer(Process):
         con.execute(
             """
             ALTER TABLE {}.METHOD_DESC
-            ADD CONSTRAINT PK_METHOD_MATCH 
+            ADD CONSTRAINT PK_METHOD_DESC 
             PRIMARY KEY (METHOD_AC, DESC_ID)
             NOLOGGING 
             """.format(self.schema)
@@ -1013,7 +1013,7 @@ class ProteinConsumer(Process):
 
         con.execute(
             """
-            ALTER TABLE {}.I_METHOD_TAXA
+            ALTER TABLE {}.METHOD_TAXA
             ADD CONSTRAINT PK_METHOD_TAXA 
             PRIMARY KEY (METHOD_AC, RANK, TAX_ID)
             NOLOGGING 
