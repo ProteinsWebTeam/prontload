@@ -384,7 +384,8 @@ class ProteinConsumer(Process):
                 dbx = 0 if dbcode == "S" else 1
 
                 # _signatures: num of matches per signature
-                for method_ac, n_matches in _signatures:
+                # for method_ac, n_matches in _signatures:
+                for method_ac in _signatures:
                     data.append((
                         method_ac, protein_ac, dbcode,
                         code, length, left_num, desc_id
@@ -397,7 +398,7 @@ class ProteinConsumer(Process):
                         }
 
                     signatures[method_ac]["proteins"] += 1
-                    signatures[method_ac]["matches"] += n_matches
+                    signatures[method_ac]["matches"] += _signatures[method_ac]
 
                     t = time.time()
                     i = bisect.bisect(buckets_acc, method_ac)
@@ -413,72 +414,69 @@ class ProteinConsumer(Process):
 
                     # Taxonomic origins
                     for rank, tax_id in ranks.items():
-                        if rank not in s["ranks"]:
-                            s["ranks"][rank] = {tax_id: 1}
-                        elif tax_id not in s["ranks"][rank]:
-                            s["ranks"][rank][tax_id] = 1
+                        if rank in s["ranks"]:
+                            if tax_id in s["ranks"][rank]:
+                                s["ranks"][rank][tax_id] += 1
+                            else:
+                                s["ranks"][rank][tax_id] = 1
                         else:
-                            s["ranks"][rank][tax_id] += 1
+                            s["ranks"][rank] = {tax_id: 1}
 
                     # UniProt descriptions
-                    if desc_id not in s["names"]:
-                        s["names"][desc_id] = [0, 0]
+                    if desc_id in s["names"]:
+                        s["names"][desc_id][dbx] += 1
+                    elif dbx:
+                        s["names"][desc_id] = [0, 1]
+                    else:
+                        s["names"][desc_id] = [1, 0]
 
-                    s["names"][desc_id][dbx] += 1
                     count_time += time.time() - t
 
                 # _comparisons: match overlaps between signatures
                 t = time.time()
-                collocations = set()
-                overlaps = set()
-                for acc_1, len_1, acc_2, len_2, overlap in _comparisons:
+                for acc_1 in _comparisons:
                     if acc_1 in comparisons:
                         d = comparisons[acc_1]
                     else:
                         d = comparisons[acc_1] = {}
 
-                    if acc_2 in d:
-                        comp = d[acc_2]
-                    else:
-                        comp = d[acc_2] = {
-                            # num of proteins in which both sign. occur
-                            # (not necessarily overlapping)
-                            'prot': 0,
-                            # num of proteins in which signatures overlap
-                            'prot_over': 0,
-                            # num of times signatures overlap (>= prot_over)
-                            'over': 0,
-                            # sum of overlap lengths
-                            # (to compute the average length later)
-                            'length': 0,
-                            # sum of fractions of matches overlapping
-                            # (overlap length / match length)
-                            'frac_1': 0,
-                            'frac_2': 0
-                        }
+                    for acc_2 in _comparisons[acc_1]:
+                        if acc_2 in d:
+                            comp = d[acc_2]
+                        else:
+                            comp = d[acc_2] = {
+                                # num of proteins in which both sign. occur
+                                # (not necessarily overlapping)
+                                'prot': 0,
+                                # num of proteins in which signatures overlap
+                                'prot_over': 0,
+                                # num of times signatures overlap (>= prot_over)
+                                'over': 0,
+                                # sum of overlap lengths
+                                # (to compute the average length later)
+                                'length': 0,
+                                # sum of fractions of matches overlapping
+                                # (overlap length / match length)
+                                'frac_1': 0,
+                                'frac_2': 0
+                            }
 
-                    acc = (acc_1, acc_2)
-                    if acc not in collocations:
-                        # First collocation (acc_1, acc_2)
-                        # for the current protein
-                        collocations.add(acc)
                         comp['prot'] += 1
+                        prot_over = False
+                        for len_1, len_2, overlap in _comparisons[acc_1][acc_2]:
+                            if overlap > (min(len_1, len_2) / 2):
+                                """
+                                Consider that matches significantly overlap
+                                if the overlap is longer
+                                than the half of the shortest match
+                                """
+                                comp['frac_1'] += overlap / len_1
+                                comp['frac_2'] += overlap / len_2
+                                comp['over'] += 1
+                                comp['length'] += overlap
+                                prot_over = True
 
-                    if overlap > (min(len_1, len_2) / 2):
-                        """
-                        Consider that matches significantly overlap
-                        if the overlap is longer
-                        than the half of the shortest match
-                        """
-                        comp['frac_1'] += overlap / len_1
-                        comp['frac_2'] += overlap / len_2
-                        comp['over'] += 1
-                        comp['length'] += overlap
-
-                        if acc not in overlaps:
-                            # First overlap (acc_1, acc_2)
-                            # for the current protein
-                            overlaps.add(acc)
+                        if prot_over:
                             comp['prot_over'] += 1
 
                 compare_time2 += time.time() - t
@@ -863,20 +861,6 @@ class ProteinConsumer(Process):
             PRIMARY KEY (METHOD_AC, PROTEIN_AC)
             """.format(self.schema)
         )
-        # con.execute(
-        #     """
-        #     CREATE INDEX I_METHOD2PROTEIN$M
-        #     ON {}.METHOD2PROTEIN (METHOD_AC)
-        #     NOLOGGING
-        #     """.format(self.schema)
-        # )
-        # con.execute(
-        #     """
-        #     CREATE INDEX I_METHOD2PROTEIN$P
-        #     ON {}.METHOD2PROTEIN (PROTEIN_AC)
-        #     NOLOGGING
-        #     """.format(self.schema)
-        # )
         con.execute(
             """
             CREATE INDEX I_METHOD2PROTEIN$LN
@@ -1026,17 +1010,26 @@ class ProteinConsumer(Process):
 
     @staticmethod
     def compare(matches):
-        comparisons = []
+        comparisons = {}
         signatures = {}
         for m1_acc, m1_start, m1_end in matches:
             m1_len = m1_end - m1_start + 1
 
             if m1_acc in signatures:
                 signatures[m1_acc] += 1
+                m1 = comparisons[m1_acc]
             else:
                 signatures[m1_acc] = 1
+                m1 = comparisons[m1_acc] = {}
 
             for m2_acc, m2_start, m2_end in matches:
+                if m1_acc > m2_acc:
+                    continue
+                elif m2_acc in m1:
+                    m2 = m1[m2_acc]
+                else:
+                    m2 = m1[m2_acc] = []
+
                 m2_len = m2_end - m2_start + 1
                 """
                 1           13      end position *is* included
@@ -1047,17 +1040,15 @@ class ProteinConsumer(Process):
                                     frac 1 = 5 / 13 = 0.38...
                                     frac 2 = 5 / 8 = 0.625
                 """
-                if m1_acc <= m2_acc:
-                    comparisons.append((
-                        m1_acc,
-                        m1_len,
-                        m2_acc,
-                        m2_len,
-                        # overlap length
-                        min(m1_end, m2_end) - max(m1_start, m2_start) + 1
-                    ))
 
-        return list(signatures.items()), comparisons
+                # overlap
+                m2.append((
+                    m1_len,
+                    m2_len,
+                    min(m1_end, m2_end) - max(m1_start, m2_start) + 1
+                ))
+
+        return signatures, comparisons
 
     @staticmethod
     def condense(matches, max_gap):
