@@ -1125,21 +1125,12 @@ class ProteinConsumer2(Process):
         con = Connection(self.dsn)
 
         # Get signatures
-        signatures = []
-        candidates = set()
-        non_prosite_candidates = set()
         query = """
-            SELECT METHOD_AC, DBCODE, CANDIDATE
+            SELECT METHOD_AC
             FROM {}.METHOD
             ORDER BY METHOD_AC
         """.format(self.schema)
-        for accession, dbcode, candidate in con.get(query):
-            signatures.append(accession)
-
-            if candidate == "Y":
-                candidates.add(accession)
-                if dbcode != 'P':
-                    non_prosite_candidates.add(accession)
+        signatures = [row[0] for row in con.get(query)]
 
         # Create buckets
         step = math.ceil(len(signatures) / self.n_buckets)
@@ -1498,6 +1489,19 @@ class Aggregator(Process):
 
             buckets.append(_buckets)
 
+        con = Connection(self.dsn)
+        candidates = set()
+        non_prosite_candidates = set()
+        query = """
+            SELECT METHOD_AC, DBCODE,
+            FROM {}.METHOD
+            WHERE CANDIDATE = 'Y'
+        """.format(self.schema)
+        for accession, dbcode in con.get(query):
+            candidates.add(accession)
+            if dbcode != 'P':
+                non_prosite_candidates.add(accession)
+
         # Determine relations/adjacent
         relations = {}
         adjacents = {}
@@ -1679,8 +1683,6 @@ class Aggregator(Process):
                     elif prediction == 'CONTAINER_OF':
                         prediction = 'CONTAINED_BY'
                     predictions.append((acc_2, acc_1, prediction))
-
-        con = Connection(self.dsn)
 
         # Populating METHOD_MATCH
         logging.info("creating METHOD_MATCH")
