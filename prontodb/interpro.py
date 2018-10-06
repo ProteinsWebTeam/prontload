@@ -290,7 +290,7 @@ class ProteinConsumer(Process):
         query = """
             SELECT METHOD_AC, DBCODE, CANDIDATE
             FROM {}.METHOD
-            ORDER BY METHOD_AC 
+            ORDER BY METHOD_AC
         """.format(self.schema)
         for accession, dbcode, candidate in con.get(query):
             signatures.append(accession)
@@ -450,7 +450,8 @@ class ProteinConsumer(Process):
                                 'prot': 0,
                                 # num of proteins in which signatures overlap
                                 'prot_over': 0,
-                                # num of times signatures overlap (>= prot_over)
+                                # num of times signatures overlap
+                                # (>= prot_over)
                                 'over': 0,
                                 # sum of overlap lengths
                                 # (to compute the average length later)
@@ -463,17 +464,17 @@ class ProteinConsumer(Process):
 
                         comp['prot'] += 1
                         prot_over = False
-                        for len_1, len_2, overlap in _comparisons[acc_1][acc_2]:
-                            if overlap > (min(len_1, len_2) / 2):
+                        for l1, l2, o in _comparisons[acc_1][acc_2]:
+                            if o > (min(l1, l2) / 2):
                                 """
                                 Consider that matches significantly overlap
                                 if the overlap is longer
                                 than the half of the shortest match
                                 """
-                                comp['frac_1'] += overlap / len_1
-                                comp['frac_2'] += overlap / len_2
+                                comp['frac_1'] += o / l1
+                                comp['frac_2'] += o / l2
                                 comp['over'] += 1
-                                comp['length'] += overlap
+                                comp['length'] += o
                                 prot_over = True
 
                         if prot_over:
@@ -647,10 +648,10 @@ class ProteinConsumer(Process):
 
                     """
                     Parent/Child relationships:
-                    The protein/matches made by the child entry 
+                    The protein/matches made by the child entry
                         must be a complete (>75%) subset of the parent entry
-                        
-                    if over(A) > 0.75, it means that A overlaps with B 
+
+                    if over(A) > 0.75, it means that A overlaps with B
                         in at least 75% of its proteins or matches:
                             A is a CHILD_OF B
                     """
@@ -772,9 +773,9 @@ class ProteinConsumer(Process):
                     avg_frac1 = avg_frac2 = avg_over = 0
 
                 """
-                Cast to float as cx_Oracle 6.1 throws TypeError 
+                Cast to float as cx_Oracle 6.1 throws TypeError
                     (expecting integer)
-                when the value of the 1st record is an integer 
+                when the value of the 1st record is an integer
                     (e.g. AVG_OVER=0)
                 and the value for the second is not (e.g. AVG_OVER=25.6)
                 """
@@ -987,9 +988,9 @@ class ProteinConsumer(Process):
         con.execute(
             """
             ALTER TABLE {}.METHOD_DESC
-            ADD CONSTRAINT PK_METHOD_DESC 
+            ADD CONSTRAINT PK_METHOD_DESC
             PRIMARY KEY (METHOD_AC, DESC_ID)
-            NOLOGGING 
+            NOLOGGING
             """.format(self.schema)
         )
         con.optimize_table(self.schema, "METHOD_DESC", cascade=True)
@@ -998,9 +999,9 @@ class ProteinConsumer(Process):
         con.execute(
             """
             ALTER TABLE {}.METHOD_TAXA
-            ADD CONSTRAINT PK_METHOD_TAXA 
+            ADD CONSTRAINT PK_METHOD_TAXA
             PRIMARY KEY (METHOD_AC, RANK, TAX_ID)
-            NOLOGGING 
+            NOLOGGING
             """.format(self.schema)
         )
         con.optimize_table(self.schema, "METHOD_TAXA", cascade=True)
@@ -1251,7 +1252,7 @@ def load_matches(dsn, schema, **kwargs):
                         else:
                             put_time += time.time() - t
                             n_free += 1
-                         finally:   
+                         finally:
                             chunk = []
 
                 matches_agg = []
@@ -1357,7 +1358,7 @@ def load_matches(dsn, schema, **kwargs):
         else:
             put_time += time.time() - t
             n_free += 1
-         finally:   
+         finally:
             chunk = []
 
     if matches:
@@ -1380,7 +1381,7 @@ def load_matches(dsn, schema, **kwargs):
         n_proteins,
         n_proteins // (time.time() - ts)
     ))
-    
+
     logging.info("average put time:       {:>10.0f} seconds".format(put_time/n_free))
     logging.info("block time (queue full):{:>10.0f} seconds".format(full_time))
     logging.info("matches insert time:    {:>10.0f} seconds".format(insert_time))
