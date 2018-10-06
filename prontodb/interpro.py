@@ -1212,7 +1212,9 @@ def load_matches(dsn, schema, **kwargs):
     left_num = None
     n_proteins = 0
     chunk = []
-    wait_time = 0
+    put_time = 0
+    n_free = 0
+    full_time = 0
     for row in source:
         protein_acc = row[0]
 
@@ -1239,9 +1241,17 @@ def load_matches(dsn, schema, **kwargs):
 
                     if len(chunk) == chunk_size:
                         t = time.time()
-                        queue.put(chunk)
-                        chunk = []
-                        wait_time += time.time() - t
+                        try:
+                            queue.put(chunk, False)
+                        except:
+                            # Assume queue.Full exception
+                            queue.put(chunk)
+                            full_time += time.time() - t
+                        else:
+                            put_time += time.time() - t
+                            n_free += 1
+                         finally:   
+                            chunk = []
 
                 matches_agg = []
                 methods = {}
@@ -1335,9 +1345,17 @@ def load_matches(dsn, schema, **kwargs):
 
     if chunk:
         t = time.time()
-        queue.put(chunk)
-        chunk = []
-        wait_time += time.time() - t
+        try:
+            queue.put(chunk, False)
+        except:
+            # Assume queue.Full exception
+            queue.put(chunk)
+            full_time += time.time() - t
+        else:
+            put_time += time.time() - t
+            n_free += 1
+         finally:   
+            chunk = []
 
     if matches:
         con.executemany(
@@ -1353,11 +1371,13 @@ def load_matches(dsn, schema, **kwargs):
         con.commit()
         matches = []
 
-    logging.info("{:>12} ({:.0f} proteins/sec, waited {:.0f} seconds)".format(
+    logging.info("{:>12} ({:.0f} proteins/sec)".format(
         n_proteins,
-        n_proteins // (time.time() - ts),
-        wait_time
+        n_proteins // (time.time() - ts)
     ))
+    
+    logging.info("average put time: {} secs".format(put_time/n_free))
+    logging.info("block time (queue full): {} secs".format(full_time))
 
     # Triggers prediction/ METHOD2PROTEIN creation
     queue.put(None)
