@@ -2034,7 +2034,7 @@ def load_matches(dsn, schema, **kwargs):
     n_consumers = kwargs.get("consumers", 2)
     limit = kwargs.get("limit", 0)
     max_gap = kwargs.get("max_gap", 20)
-    source = kwargs.get("source", iter_matches(con, schema))
+    source = kwargs.get("source")
     tmpdir = kwargs.get("tmpdir")
 
     q1 = Queue(n_consumers)
@@ -2083,6 +2083,9 @@ def load_matches(dsn, schema, **kwargs):
         ) NOLOGGING
         """.format(schema)
     )
+
+    if not source:
+        source = iter_matches(con, schema)
 
     ts = time.time()
     # matches to be inserted in the MATCH table
