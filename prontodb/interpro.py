@@ -1215,6 +1215,7 @@ def load_matches(dsn, schema, **kwargs):
     put_time = 0
     n_free = 0
     full_time = 0
+    insert_time = 0
     for row in source:
         protein_acc = row[0]
 
@@ -1289,6 +1290,7 @@ def load_matches(dsn, schema, **kwargs):
             method_dbcode, fragments
         ))
         if len(matches) == chunk_size:
+            t = time.time()
             con.executemany(
                 """
                 INSERT /*+APPEND*/ INTO {}.MATCH (
@@ -1300,6 +1302,7 @@ def load_matches(dsn, schema, **kwargs):
                 matches
             )
             con.commit()
+            insert_time += time.time() - t
             matches = []
 
         """
@@ -1358,6 +1361,7 @@ def load_matches(dsn, schema, **kwargs):
             chunk = []
 
     if matches:
+        t = time.time()
         con.executemany(
             """
             INSERT /*+APPEND*/ INTO {}.MATCH (
@@ -1369,6 +1373,7 @@ def load_matches(dsn, schema, **kwargs):
             matches
         )
         con.commit()
+        insert_time += time.time() - t
         matches = []
 
     logging.info("{:>12} ({:.0f} proteins/sec)".format(
@@ -1376,8 +1381,9 @@ def load_matches(dsn, schema, **kwargs):
         n_proteins // (time.time() - ts)
     ))
     
-    logging.info("average put time: {} secs".format(put_time/n_free))
-    logging.info("block time (queue full): {} secs".format(full_time))
+    logging.info("average put time:       {:>10.0f} seconds".format(put_time/n_free))
+    logging.info("block time (queue full):{:>10.0f} seconds".format(full_time))
+    logging.info("matches insert time:    {:>10.0f} seconds".format(insert_time))
 
     # Triggers prediction/ METHOD2PROTEIN creation
     queue.put(None)
