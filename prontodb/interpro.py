@@ -1476,7 +1476,7 @@ class Aggregator(Process):
             # Merge signatures and comparisons
             for acc in _signatures:
                 if acc in signatures:
-                    for k in _signatures.items():
+                    for k, v in _signatures[acc].items():
                         signatures[acc][k] += v
                 else:
                     signatures[acc] = _signatures[acc]
