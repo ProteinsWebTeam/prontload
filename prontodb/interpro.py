@@ -1456,6 +1456,7 @@ class ProteinConsumer2(Process):
 
 class Aggregator(Process):
     def __init__(self, dsn, schema, queue, **kwargs):
+        super().__init__()
         self.dsn = dsn
         self.schema = schema
         self.queue = queue
