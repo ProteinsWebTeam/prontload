@@ -1899,7 +1899,7 @@ class Aggregator(Process):
             signatures = {}
             for b in buckets:
                 self.load_bucket(b[i], signatures)
-                #os.remove(b[i])
+                os.remove(b[i])
 
             for acc in signatures:
                 s = signatures[acc]
