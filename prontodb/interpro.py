@@ -1252,7 +1252,7 @@ def load_matches(dsn, schema, **kwargs):
                         else:
                             put_time += time.time() - t
                             n_free += 1
-                         finally:
+                        finally:
                             chunk = []
 
                 matches_agg = []
@@ -1358,7 +1358,7 @@ def load_matches(dsn, schema, **kwargs):
         else:
             put_time += time.time() - t
             n_free += 1
-         finally:
+        finally:
             chunk = []
 
     if matches:
