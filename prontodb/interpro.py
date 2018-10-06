@@ -1493,7 +1493,7 @@ class Aggregator(Process):
         candidates = set()
         non_prosite_candidates = set()
         query = """
-            SELECT METHOD_AC, DBCODE,
+            SELECT METHOD_AC, DBCODE
             FROM {}.METHOD
             WHERE CANDIDATE = 'Y'
         """.format(self.schema)
@@ -2279,6 +2279,7 @@ def load_matches(dsn, schema, **kwargs):
     ))
 
     logging.info("average put time:       {:>10.2f} seconds".format(put_time/n_free))
+    logging.info("successfull put:        {:>10.2f} seconds".format(n_free))
     logging.info("block time (queue full):{:>10.2f} seconds".format(full_time))
     logging.info("matches insert time:    {:>10.2f} seconds".format(insert_time))
 
