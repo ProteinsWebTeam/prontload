@@ -1200,19 +1200,19 @@ def iter_matches(con, schema):
 def load_matches(dsn, schema, **kwargs):
     n_buckets = kwargs.get("buckets", 100)
     chunk_size = kwargs.get("chunk_size", 100000)
-    n_consumers = kwargs.get("consumers", 2)
+    processes = kwargs.get("processes", 3)
     limit = kwargs.get("limit", 0)
     max_gap = kwargs.get("max_gap", 20)
     source = kwargs.get("source")
     tmpdir = kwargs.get("tmpdir")
 
-    q1 = Queue(n_consumers)
+    q1 = Queue(processes)
     q2 = Queue()
 
     consumers = [
         ProteinConsumer(dsn, schema, max_gap, q1, q2,
         buckets=n_buckets, chunk_size=chunk_size, tmpdir=tmpdir)
-        for _ in range(max(1, n_consumers))
+        for _ in range(max(1, processes-2))
     ]
     for c in consumers:
         c.start()
