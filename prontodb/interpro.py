@@ -1206,13 +1206,14 @@ def load_matches(dsn, schema, **kwargs):
     source = kwargs.get("source")
     tmpdir = kwargs.get("tmpdir")
 
-    q1 = Queue(processes)
+    n_consumers = max(1, processes-2)
+    q1 = Queue(_consumers)
     q2 = Queue()
 
     consumers = [
         ProteinConsumer(dsn, schema, max_gap, q1, q2,
         buckets=n_buckets, chunk_size=chunk_size, tmpdir=tmpdir)
-        for _ in range(max(1, processes-2))
+        for _ in range(n_consumers)
     ]
     for c in consumers:
         c.start()
