@@ -36,8 +36,8 @@ def cli():
     parser.add_argument("-t", "--tmpdir", default=gettempdir(),
                         help="temporary directory "
                              "(default: {})".format(gettempdir()))
-    parser.add_argument("-p", "--threads", type=int, default=2,
-                        help="match worker threads (default: 2)")
+    parser.add_argument("-p", "--threads", type=int, default=3,
+                        help="number of threads for the 'matches' step (default: 3)")
     parser.add_argument("-o", "--output", default=default_report,
                         help="output SwissProt report for curators "
                              "(default: {})".format(default_report))
@@ -125,7 +125,7 @@ def cli():
             "func": interpro.load_matches,
             "args": (dsn, schema),
             "kwargs": dict(
-                consumers=args.threads,
+                processes=args.threads,
                 max_gap=max_gap,
                 tmpdir=args.tmpdir
             )
