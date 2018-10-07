@@ -34,6 +34,7 @@ Available options are:
 | ------------- |--------------------------------------------------------------------------------|
 | -s, --steps   | space-separated list of steps to run (default: all)                            |
 | -t, --tmpdir  | directory for temporary files (default: `/tmp/`)                               |
+| -p, --threads | number of threads to use in the **matches** step (default/min: 3)              |
 | -o, --output  | output file for the Swiss-Prot descriptions report for curators                |
 
 ### Steps
