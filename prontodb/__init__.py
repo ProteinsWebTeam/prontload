@@ -15,7 +15,6 @@ def cli():
     import argparse
     import os
     import json
-    import sys
     from datetime import datetime
     from tempfile import gettempdir
 
@@ -41,6 +40,9 @@ def cli():
     parser.add_argument("-o", "--output", default=default_report,
                         help="output SwissProt report for curators "
                              "(default: {})".format(default_report))
+     parser.add_argument("-v", "--version", action="version",
+                        version="%(prog)s {}".format(__version__),
+                        help="show the version and quit")
     args = parser.parse_args()
 
     os.makedirs(args.tmpdir, exist_ok=True)
@@ -51,7 +53,7 @@ def cli():
     dsn = config["dsn"]
     schema = config["schema"]
     max_gap = int(config["max_gap"])
-    
+
     steps = [
         {
             "name": "clear",
@@ -150,14 +152,13 @@ def cli():
             if s in step_names:
                 to_run.append(step_names.index(s))
             else:
-                sys.stderr.write(
+                parser.error(
                     "error: invalid step: '{}' "
                     "(choose from {})\n".format(
                         s,
                         ", ".join(["'{}'".format(_s) for _s in step_names])
                     )
                 )
-                exit(1)
     else:
         to_run = [i for i, s in enumerate(steps) if not s.get("skip")]
 
