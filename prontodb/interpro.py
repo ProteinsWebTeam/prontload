@@ -998,7 +998,7 @@ class Aggregator(Process):
                   "METHOD_PREDICTION", "INTERPRO_SELECT")
 
         # Optimizing METHOD2PROTEIN
-        logging.info("{}: optimizing METHOD2PROTEIN".format(self.name))
+        logging.info("optimizing METHOD2PROTEIN")
         con.execute(
             """
             ALTER TABLE {}.METHOD2PROTEIN
@@ -1098,7 +1098,7 @@ class Aggregator(Process):
                 con.commit()
 
         # Optimizing
-        logging.info("{}: optimizing METHOD_DESC".format(self.name))
+        logging.info("optimizing METHOD_DESC")
         con.execute(
             """
             ALTER TABLE {}.METHOD_DESC
@@ -1110,7 +1110,7 @@ class Aggregator(Process):
         con.optimize_table(self.schema, "METHOD_DESC", cascade=True)
         con.grant("SELECT", self.schema, "METHOD_DESC", "INTERPRO_SELECT")
 
-        logging.info("{}: optimizing METHOD_TAXA".format(self.name))
+        logging.info("optimizing METHOD_TAXA")
         con.execute(
             """
             ALTER TABLE {}.METHOD_TAXA
@@ -1122,8 +1122,8 @@ class Aggregator(Process):
         con.optimize_table(self.schema, "METHOD_TAXA", cascade=True)
         con.grant("SELECT", self.schema, "METHOD_TAXA", "INTERPRO_SELECT")
 
-        logging.info("{} terminated, temporary files: {} bytes".format(
-            self.name, total_size
+        logging.info("complete; temporary files: {} bytes".format(
+            total_size
         ))
 
     @staticmethod
