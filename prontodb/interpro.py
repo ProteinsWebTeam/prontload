@@ -1122,9 +1122,7 @@ class Aggregator(Process):
         con.optimize_table(self.schema, "METHOD_TAXA", cascade=True)
         con.grant("SELECT", self.schema, "METHOD_TAXA", "INTERPRO_SELECT")
 
-        logging.info("complete; temporary files: {} bytes".format(
-            total_size
-        ))
+        logging.info("temporary files: {} bytes".format(total_size))
 
     @staticmethod
     def load_bucket(filepath, signatures):
