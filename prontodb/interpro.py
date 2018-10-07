@@ -1207,7 +1207,7 @@ def load_matches(dsn, schema, **kwargs):
     tmpdir = kwargs.get("tmpdir")
 
     n_consumers = max(1, processes-2)
-    q1 = Queue(_consumers)
+    q1 = Queue(n_consumers)
     q2 = Queue()
 
     consumers = [
