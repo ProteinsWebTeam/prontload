@@ -153,7 +153,7 @@ def cli():
                 to_run.append(step_names.index(s))
             else:
                 parser.error(
-                    "error: invalid step: '{}' "
+                    "invalid step: '{}' "
                     "(choose from {})\n".format(
                         s,
                         ", ".join(["'{}'".format(_s) for _s in step_names])
