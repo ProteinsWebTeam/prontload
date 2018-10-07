@@ -489,7 +489,7 @@ class ProteinConsumer(Process):
         logging.info("{}: count:   {:>10.0f} seconds".format(
             self.name, count_time
         ))
-        logging.info("{}: hash:{:>10.0f} seconds".format(
+        logging.info("{}: hash:    {:>10.0f} seconds".format(
             self.name, hash_time
         ))
         logging.info("{}: compare: {:>10.0f} seconds".format(
