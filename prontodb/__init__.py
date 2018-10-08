@@ -122,7 +122,7 @@ def cli():
             "args": (dsn, schema)
         },
         {
-            # Requires "descriptions" and "taxa"
+            # Requires "signatures", "descriptions" and "taxa"
             "name": "matches",
             "func": interpro.load_matches,
             "args": (dsn, schema),
