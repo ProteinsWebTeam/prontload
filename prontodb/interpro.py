@@ -1073,7 +1073,7 @@ class Aggregator(Process):
             data2 = []
             signatures = {}
             for b in buckets:
-                total_size = os.path.getsize(b[i])
+                total_size += os.path.getsize(b[i])
                 self.load_bucket(b[i], signatures)
                 os.remove(b[i])
 
