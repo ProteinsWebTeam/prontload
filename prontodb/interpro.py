@@ -1008,6 +1008,20 @@ class Aggregator(Process):
         )
         con.execute(
             """
+            CREATE INDEX I_METHOD2PROTEIN$M
+            ON {}.METHOD2PROTEIN (METHOD_AC)
+            NOLOGGING
+            """.format(self.schema)
+        )
+        con.execute(
+            """
+            CREATE INDEX I_METHOD2PROTEIN$P
+            ON {}.METHOD2PROTEIN (PROTEIN_AC)
+            NOLOGGING
+            """.format(self.schema)
+        )
+        con.execute(
+            """
             CREATE INDEX I_METHOD2PROTEIN$LN
             ON {}.METHOD2PROTEIN (LEFT_NUMBER)
             NOLOGGING
