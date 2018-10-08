@@ -326,12 +326,6 @@ class ProteinConsumer(Process):
 
         signatures = {}
         comparisons = {}
-        insert_time = 0
-        write_time = 0
-        count_time = 0
-        hash_time = 0
-        compare_time = 0
-        overlap_time = 0
         while True:
             task = self.queue_in.get()
             if task is None:
@@ -339,12 +333,8 @@ class ProteinConsumer(Process):
 
             data = []
             for protein_ac, dbcode, length, desc_id, left_num, matches in task:
-                t = time.time()
                 md5 = self.hash(matches, self.max_gap)
-                hash_time += time.time() - t
-                t = time.time()
                 _signatures, _comparisons = self.compare(matches)
-                compare_time += time.time() - t
 
                 ranks = left_numbers.get(left_num, {"no rank": -1})
 
@@ -368,7 +358,6 @@ class ProteinConsumer(Process):
                     signatures[method_ac]["proteins"] += 1
                     signatures[method_ac]["matches"] += _signatures[method_ac]
 
-                    t = time.time()
                     i = bisect.bisect(buckets_acc, method_ac)
                     b = buckets[i - 1]
 
@@ -398,10 +387,7 @@ class ProteinConsumer(Process):
                     else:
                         s["names"][desc_id] = [1, 0]
 
-                    count_time += time.time() - t
-
                 # _comparisons: match overlaps between signatures
-                t = time.time()
                 for acc_1 in _comparisons:
                     if acc_1 in comparisons:
                         d = comparisons[acc_1]
@@ -448,9 +434,6 @@ class ProteinConsumer(Process):
                         if prot_over:
                             comp['prot_over'] += 1
 
-                overlap_time += time.time() - t
-
-            t = time.time()
             for i in range(0, len(data), self.chunk_size):
                 con.executemany(
                     """
@@ -463,40 +446,18 @@ class ProteinConsumer(Process):
                     data[i:i + self.chunk_size]
                 )
                 con.commit()
-            insert_time += time.time() - t
 
-            t = time.time()
             for b in buckets:
                 if b["signatures"]:
                     with open(b["file"], "ab") as fh:
                         s = pickle.dumps(b["signatures"])
                         fh.write(struct.pack("<I", len(s)) + s)
                     b["signatures"] = {}
-            write_time += time.time() - t
 
         self.queue_out.put((
             signatures,
             comparisons,
             [b["file"] for b in buckets]
-        ))
-
-        logging.info("{}: insert:  {:>10.0f} seconds".format(
-            self.name, insert_time
-        ))
-        logging.info("{}: write:   {:>10.0f} seconds".format(
-            self.name, write_time
-        ))
-        logging.info("{}: count:   {:>10.0f} seconds".format(
-            self.name, count_time
-        ))
-        logging.info("{}: hash:    {:>10.0f} seconds".format(
-            self.name, hash_time
-        ))
-        logging.info("{}: compare: {:>10.0f} seconds".format(
-            self.name, compare_time
-        ))
-        logging.info("{}: overlap: {:>10.0f} seconds".format(
-            self.name, overlap_time
         ))
 
     @staticmethod
@@ -1288,10 +1249,7 @@ def load_matches(dsn, schema, **kwargs):
     left_num = None
     n_proteins = 0
     chunk = []
-    put_time = 0
-    n_free = 0
-    full_time = 0
-    insert_time = 0
+    enqueue_time = 0
     for row in source:
         protein_acc = row[0]
 
@@ -1318,17 +1276,9 @@ def load_matches(dsn, schema, **kwargs):
 
                     if len(chunk) == chunk_size:
                         t = time.time()
-                        try:
-                            q1.put(chunk, False)
-                        except:
-                            # Assume queue.Full exception
-                            q1.put(chunk)
-                            full_time += time.time() - t
-                        else:
-                            put_time += time.time() - t
-                            n_free += 1
-                        finally:
-                            chunk = []
+                        q1.put(chunk)
+                        enqueue_time += time.time() - t
+                        chunk = []
 
                 matches_agg = []
                 methods = {}
@@ -1366,7 +1316,6 @@ def load_matches(dsn, schema, **kwargs):
             method_dbcode, fragments
         ))
         if len(matches) == chunk_size:
-            t = time.time()
             con.executemany(
                 """
                 INSERT /*+APPEND*/ INTO {}.MATCH (
@@ -1378,7 +1327,6 @@ def load_matches(dsn, schema, **kwargs):
                 matches
             )
             con.commit()
-            insert_time += time.time() - t
             matches = []
 
         """
@@ -1424,20 +1372,11 @@ def load_matches(dsn, schema, **kwargs):
 
     if chunk:
         t = time.time()
-        try:
-            q1.put(chunk, False)
-        except:
-            # Assume queue.Full exception
-            q1.put(chunk)
-            full_time += time.time() - t
-        else:
-            put_time += time.time() - t
-            n_free += 1
-        finally:
-            chunk = []
+        q1.put(chunk)
+        enqueue_time += time.time() - t
+        chunk = []
 
     if matches:
-        t = time.time()
         con.executemany(
             """
             INSERT /*+APPEND*/ INTO {}.MATCH (
@@ -1449,18 +1388,13 @@ def load_matches(dsn, schema, **kwargs):
             matches
         )
         con.commit()
-        insert_time += time.time() - t
         matches = []
 
     logging.info("{:>12} ({:.0f} proteins/sec)".format(
         n_proteins,
         n_proteins // (time.time() - ts)
     ))
-
-    logging.info("average put time:       {:>10.2f} seconds".format(put_time/n_free))
-    logging.info("successfull put:        {:>10.2f}".format(n_free))
-    logging.info("block time (queue full):{:>10.2f} seconds".format(full_time))
-    logging.info("matches insert time:    {:>10.2f} seconds".format(insert_time))
+    logging.info("enqueue time: {:>10.0f} seconds".format(enqueue_time))
 
     for _ in consumers:
         q1.put(None)
