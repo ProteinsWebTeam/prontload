@@ -611,7 +611,7 @@ class Aggregator(Process):
 
             buckets.append(_buckets)
 
-        logging.info("{}: making predictions".format(self.name))
+        logging.info("making predictions")
 
         con = Connection(self.dsn)
         candidates = set()
