@@ -1073,7 +1073,7 @@ class Aggregator(Process):
                 con.commit()
 
         # Optimizing
-        logging.info("optimizing METHOD_DESC")
+        logging.info("optimizing METHOD_DESC and METHOD_TAXA")
         con.execute(
             """
             ALTER TABLE {}.METHOD_DESC
@@ -1085,7 +1085,6 @@ class Aggregator(Process):
         con.optimize_table(self.schema, "METHOD_DESC", cascade=True)
         con.grant("SELECT", self.schema, "METHOD_DESC", "INTERPRO_SELECT")
 
-        logging.info("optimizing METHOD_TAXA")
         con.execute(
             """
             ALTER TABLE {}.METHOD_TAXA
