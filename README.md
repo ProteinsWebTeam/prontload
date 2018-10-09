@@ -1,6 +1,6 @@
 # pronto-loader
 
-Refresh Pronto with the latest data from InterPro, GOA, and UniProt.
+Refresh [Pronto](https://github.com/ProteinsWebTeam/pronto/) with the latest data from InterPro, GOA, and UniProt.
 
 ## Installation
 
