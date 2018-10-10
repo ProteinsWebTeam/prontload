@@ -1,4 +1,4 @@
-# pronto-loader
+# prontload
 
 Refresh [Pronto](https://github.com/ProteinsWebTeam/pronto/) with the latest data from InterPro, GOA, and UniProt.
 
@@ -8,7 +8,7 @@ Get the latest version of the code and install requirements (Python 3.4+):
 
 ```sh
 $ git clone https://github.com/ProteinsWebTeam/pronto-loader.git
-$ cd pronto-loader/
+$ cd prontload/
 $ python setup.py install
 ```
 
@@ -25,7 +25,7 @@ Create or edit the `config.json` file to set the following settings:
 The only requirement argument is the path to `config.json`.
 
 ```sh
-pronto-update config.json [OPTIONS]
+prontload config.json [OPTIONS]
 ```
 
 Available options are:
