@@ -7,7 +7,7 @@ Refresh [Pronto](https://github.com/ProteinsWebTeam/pronto/) with the latest dat
 Get the latest version of the code and install requirements (Python 3.4+):
 
 ```sh
-$ git clone https://github.com/ProteinsWebTeam/pronto-loader.git
+$ git clone https://github.com/ProteinsWebTeam/prontload.git
 $ cd prontload/
 $ python setup.py install
 ```
