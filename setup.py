@@ -4,7 +4,7 @@
 import os
 from setuptools import setup, find_packages
 
-from prontodb import __version__
+from prontload import __version__
 
 
 def get_requirements():
@@ -20,7 +20,7 @@ def get_requirements():
 
 
 setup(
-    name='prontodb',
+    name='prontload',
     description="Refresh Pronto with the latest data "
                 "from InterPro, GOA, and UniProt",
     version=__version__,
@@ -29,7 +29,7 @@ setup(
     install_requires=get_requirements(),
     entry_points={
         'console_scripts': [
-            'pronto-update = prontodb:cli',
+            'prontload = prontload:cli',
         ]
     }
 )

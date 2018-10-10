@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-__version__ = "0.4.2"
+__version__ = "0.4.4"
 
 import logging
 logging.basicConfig(
@@ -15,7 +15,6 @@ def cli():
     import argparse
     import os
     import json
-    import sys
     from datetime import datetime
     from tempfile import gettempdir
 
@@ -36,9 +35,15 @@ def cli():
     parser.add_argument("-t", "--tmpdir", default=gettempdir(),
                         help="temporary directory "
                              "(default: {})".format(gettempdir()))
+    parser.add_argument("-p", "--threads", type=int, default=3,
+                        help="number of threads "
+                             "for the 'matches' step (default: 3)")
     parser.add_argument("-o", "--output", default=default_report,
                         help="output SwissProt report for curators "
                              "(default: {})".format(default_report))
+    parser.add_argument("-v", "--version", action="version",
+                        version="%(prog)s {}".format(__version__),
+                        help="show the version and quit")
     args = parser.parse_args()
 
     os.makedirs(args.tmpdir, exist_ok=True)
@@ -49,7 +54,7 @@ def cli():
     dsn = config["dsn"]
     schema = config["schema"]
     max_gap = int(config["max_gap"])
-    
+
     steps = [
         {
             "name": "clear",
@@ -118,24 +123,25 @@ def cli():
             "args": (dsn, schema)
         },
         {
-            # Requires "descriptions" and "taxa"
+            # Requires "signatures", "descriptions" and "taxa"
             "name": "matches",
             "func": interpro.load_matches,
             "args": (dsn, schema),
             "kwargs": dict(
+                processes=args.threads,
                 max_gap=max_gap,
                 tmpdir=args.tmpdir
             )
         },
         {
-            "name": "copy",
-            "func": interpro.copy_schema,
-            "args": (dsn, schema)
-        },
-        {
             "name": "report",
             "func": interpro.report_description_changes,
             "args": (dsn, schema, args.output)
+        },
+        {
+            "name": "copy",
+            "func": interpro.copy_schema,
+            "args": (dsn, schema)
         }
     ]
 
@@ -147,14 +153,13 @@ def cli():
             if s in step_names:
                 to_run.append(step_names.index(s))
             else:
-                sys.stderr.write(
-                    "error: invalid step: '{}' "
+                parser.error(
+                    "invalid step: '{}' "
                     "(choose from {})\n".format(
                         s,
                         ", ".join(["'{}'".format(_s) for _s in step_names])
                     )
                 )
-                exit(1)
     else:
         to_run = [i for i, s in enumerate(steps) if not s.get("skip")]
 
