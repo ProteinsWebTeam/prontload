@@ -1191,7 +1191,7 @@ def load_matches(dsn, schema, **kwargs):
 
     consumers = [
         ProteinConsumer(dsn, schema, max_gap, q1, q2,
-        buckets=n_buckets, chunk_size=chunk_size, tmpdir=tmpdir)
+                        buckets=n_buckets, chunk_size=chunk_size, tmpdir=tmpdir)
         for _ in range(n_consumers)
     ]
     for c in consumers:
@@ -1511,11 +1511,11 @@ def _load_matches(dsn, schema, **kwargs):
     con = Connection(dsn)
     cnt = bucket_size
     for row in con.get(
-        """
-        SELECT PROTEIN_AC 
-        FROM {}.PROTEIN 
-        ORDER BY PROTEIN_AC
-        """.format(schema)
+            """
+            SELECT PROTEIN_AC 
+            FROM {}.PROTEIN 
+            ORDER BY PROTEIN_AC
+            """.format(schema)
     ):
         if cnt == bucket_size:
             accessions.append(row[0])
@@ -1538,6 +1538,8 @@ def _load_matches(dsn, schema, **kwargs):
     # Get protein matches (unsorted)
     chunk = []
     matches = []
+    n_proteins = 0
+    ts = time.time()
     for row in iter_matches(con, schema, order=False):
         protein_acc = row[0]
         method_acc = row[1]
@@ -1580,11 +1582,19 @@ def _load_matches(dsn, schema, **kwargs):
         if not is_fragment:
             # Keep matches when the protein is not a fragment
             chunk.append((protein_acc, prot_dbcode, length, desc_id, left_num,
-                          method_acc, method_type, pos_start, pos_end))
+                          method_acc, method_dbcode, method_type, pos_start,
+                          pos_end))
 
             if len(chunk) == 1000:
                 queue_in.put(chunk)
                 chunk = []
+
+        n_proteins += 1
+        if not n_proteins % 1000000:
+            logging.info("{:>12} ({:.0f} proteins/sec)".format(
+                n_proteins,
+                n_proteins // (time.time() - ts)
+            ))
 
     if matches:
         con.executemany(
@@ -1604,6 +1614,11 @@ def _load_matches(dsn, schema, **kwargs):
         queue_in.put(chunk)
         chunk = []
 
+    logging.info("{:>12} ({:.0f} proteins/sec)".format(
+        n_proteins,
+        n_proteins // (time.time() - ts)
+    ))
+
     for _ in workers:
         queue_in.put(None)
 
@@ -1615,6 +1630,8 @@ def _load_matches(dsn, schema, **kwargs):
     for w in workers:
         w.join()
 
+    n_proteins = 0
+    ts = time.time()
     for key in accessions:
         proteins = organisers[0].merge(key)
 
@@ -1625,8 +1642,64 @@ def _load_matches(dsn, schema, **kwargs):
                 else:
                     proteins[k] = v
 
+        for protein_acc in proteins:
+            methods = {}
+            matches = []
+            prot_dbcode = None
+            length = None
+            desc_id = None
+            left_num = None
+            for m in proteins[protein_acc]:
+                (prot_dbcode, length, desc_id, left_num, method_acc,
+                 method_dbcode, method_type, pos_start, pos_end) = m
 
+                if method_dbcode in ("F", "V"):
+                    """
+                    PANTHER & PRINTS:
+                        Merge protein matches.
+                        If the signature is a family*, use the entire protein.
 
+                        * all PANTHER signatures, almost all PRINTS signatures
+                    """
+                    if method_acc not in methods:
+                        if method_type == "F":
+                            # Families: use the entire protein sequence
+                            methods[method_acc] = [(1, length)]
+                        else:
+                            methods[method_acc] = [(pos_start, pos_end)]
+                    elif method_type != "F":
+                        # Only for non-families
+                        # (because families use the entire protein)
+                        methods[method_acc].append((pos_start, pos_end))
+                else:
+                    matches.append((method_acc, pos_start, pos_end))
+
+            # Merge matches
+            for method_acc in methods:
+                min_pos = None
+                max_pos = None
+
+                for pos_start, pos_end in methods[method_acc]:
+                    if min_pos is None or pos_start < min_pos:
+                        min_pos = pos_start
+                    if max_pos is None or pos_end > max_pos:
+                        max_pos = pos_end
+
+                matches.append((method_acc, min_pos, max_pos))
+
+            t = (protein_acc, prot_dbcode, length, desc_id, left_num, matches)
+
+            n_proteins += 1
+            if not n_proteins % 1000000:
+                logging.info("{:>12} ({:.0f} proteins/sec)".format(
+                    n_proteins,
+                    n_proteins // (time.time() - ts)
+                ))
+
+    logging.info("{:>12} ({:.0f} proteins/sec)".format(
+        n_proteins,
+        n_proteins // (time.time() - ts)
+    ))
 
 
 def copy_schema(dsn, schema):
