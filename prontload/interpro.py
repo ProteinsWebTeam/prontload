@@ -68,7 +68,8 @@ def load_signatures(dsn, schema):
             DBCODE CHAR(1) NOT NULL,
             CANDIDATE CHAR(1) NOT NULL,
             DESCRIPTION VARCHAR2(220),
-            SIG_TYPE CHAR(1)
+            SIG_TYPE CHAR(1),
+            PROTEIN_COUNT NUMBER(8) NOT NULL DEFAULT 0
         ) NOLOGGING
         """.format(schema)
     )
@@ -1247,6 +1248,10 @@ def load_matches(dsn, schema, **kwargs):
     # Taxon left number
     left_num = None
     n_proteins = 0
+
+    method_proteins = {}
+    protein_methods = set()
+
     chunk = []
     enqueue_time = 0
     for row in source:
@@ -1281,6 +1286,14 @@ def load_matches(dsn, schema, **kwargs):
 
                 matches_agg = []
                 methods = {}
+
+                for k in protein_methods:
+                    if k in method_proteins:
+                        method_proteins[k] += 1
+                    else:
+                        method_proteins[k] = 1
+
+                protein_methods = set()
                 n_proteins += 1
                 if n_proteins == limit:
                     break
@@ -1310,6 +1323,7 @@ def load_matches(dsn, schema, **kwargs):
         desc_id = row[11]
         left_num = row[12]
 
+        protein_methods.add(method_acc)
         matches.append((
             protein, method_acc, model_acc, start, end,
             method_dbcode, fragments
@@ -1362,6 +1376,12 @@ def load_matches(dsn, schema, **kwargs):
                 max_pos = end
 
         matches_agg.append((method_acc, min_pos, max_pos))
+
+    for k in protein_methods:
+        if k in method_proteins:
+            method_proteins[k] += 1
+        else:
+            method_proteins[k] = 1
 
     if matches_agg:
         chunk.append((
@@ -1441,6 +1461,20 @@ def load_matches(dsn, schema, **kwargs):
     con.optimize_table(schema, "MATCH", cascade=True)
     con.grant("SELECT", schema, "MATCH", "INTERPRO_SELECT")
     logging.info("MATCH ready")
+
+    logging.info("updating signatures")
+    for method_acc, n_proteins in method_proteins.items():
+        con.execute(
+            """
+            UPDATE {}.METHOD
+            SET PROTEIN_COUNT = :1
+            WHERE METHOD_AC = :2
+            """.format(schema),
+            n_proteins, method_acc
+        )
+    con.commit()
+    logging.info("{} signatures updated".format(len(method_proteins)))
+
     aggreator.join()
 
 
