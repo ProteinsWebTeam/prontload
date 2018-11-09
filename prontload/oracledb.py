@@ -12,7 +12,8 @@ class Connection(object):
 
     def open(self):
         self.close()
-        self._db = cx_Oracle.connect(self._dsn, encoding='utf-8', nencoding='utf-8')
+        self._db = cx_Oracle.connect(self._dsn, encoding='utf-8',
+                                     nencoding='utf-8')
 
     def close(self):
         if self._db is not None:
@@ -77,8 +78,10 @@ class Connection(object):
         except cx_Oracle.DatabaseError as e:
             """
             From cx_Oracle documentation:
-            With cx_Oracle every exception object has exactly one argument in the `args` tuple.
-            This argument is a `cx_Oracle._Error` object which has the following five read-only attributes.
+            With cx_Oracle every exception object has exactly one argument 
+                in the `args` tuple.
+            This argument is a `cx_Oracle._Error` object 
+                which has the following five read-only attributes.
 
             (http://cx-oracle.readthedocs.io/en/latest/module.html?highlight=DatabaseError)
             """
@@ -88,7 +91,11 @@ class Connection(object):
                 # That's fine since we are going to create the table
                 return False
             elif _error.code == 54 and forgive_busy:
-                # ORA-00054 (resource busy and acquire with NOWAIT specified or timeout expired)
+                """
+                ORA-00054 
+                resource busy and acquire with NOWAIT specified 
+                    or timeout expired
+                """
                 return False
             else:
                 # Something else: raise the issue
