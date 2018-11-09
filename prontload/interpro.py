@@ -12,7 +12,11 @@ import time
 from multiprocessing import Process, Queue
 from tempfile import mkstemp
 
+from . import io
 from .oracledb import Connection
+
+
+BULK_INSERT_SIZE = 100000
 
 
 def create_synonyms(dsn, src, dst, tables=[]):
@@ -102,7 +106,7 @@ def load_signatures(dsn, schema):
     con.grant("SELECT", schema, "METHOD", "INTERPRO_SELECT")
 
 
-def load_taxa(dsn, schema, chunk_size=100000):
+def load_taxa(dsn, schema):
     con = Connection(dsn)
     con.drop_table(schema, "ETAXI")
     con.drop_table(schema, "LINEAGE")
@@ -197,13 +201,13 @@ def load_taxa(dsn, schema, chunk_size=100000):
 
             parent_id = t["parent"]
 
-    for i in range(0, len(lineage), chunk_size):
+    for i in range(0, len(lineage), BULK_INSERT_SIZE):
         con.executemany(
             """
             INSERT /*+APPEND*/ INTO {}.LINEAGE (LEFT_NUMBER, TAX_ID, RANK)
             VALUES (:1, :2, :3)
             """.format(schema),
-            lineage[i:i+chunk_size]
+            lineage[i:i+BULK_INSERT_SIZE]
         )
         con.commit()
 
@@ -1138,7 +1142,7 @@ class Aggregator(Process):
                                 s["names"][desc_id] = counts
 
 
-def iter_matches(con, schema):
+def iter_matches(con, schema, order=True):
     query = """
             SELECT
               MA.PROTEIN_AC,
@@ -1163,8 +1167,10 @@ def iter_matches(con, schema):
                 ON P.TAX_ID = E.TAX_ID
               INNER JOIN {}.PROTEIN_DESC PD
                 ON MA.PROTEIN_AC = PD.PROTEIN_AC
-            ORDER BY MA.PROTEIN_AC
     """.format(schema)
+
+    if order:
+        query += "ORDER BY MA.PROTEIN_AC"
 
     for row in con.get(query):
         yield row
@@ -1476,6 +1482,151 @@ def load_matches(dsn, schema, **kwargs):
     logging.info("{} signatures updated".format(len(method_proteins)))
 
     aggreator.join()
+
+
+def sort_matches_by_protein(accessions, queue_in, queue_out, tmpdir=None):
+    organiser = io.Organiser(accessions, tmpdir=tmpdir)
+
+    while True:
+        chunk = queue_in.get()
+        if chunk is None:
+            break
+
+        for protein_acc, *match in chunk:
+            organiser.add(protein_acc, match)
+
+        organiser.dump()
+
+    queue_out.put(organiser.path)
+
+
+def _load_matches(dsn, schema, **kwargs):
+    processes = kwargs.get("processes", 3)
+    max_gap = kwargs.get("max_gap", 20)
+    tmpdir = kwargs.get("tmpdir")
+
+    # Get protein accessions, to group them by accession later
+    accessions = []
+    bucket_size = 1000000
+    con = Connection(dsn)
+    cnt = bucket_size
+    for row in con.get(
+        """
+        SELECT PROTEIN_AC 
+        FROM {}.PROTEIN 
+        ORDER BY PROTEIN_AC
+        """.format(schema)
+    ):
+        if cnt == bucket_size:
+            accessions.append(row[0])
+            cnt = 1
+        else:
+            cnt += 1
+
+    # Create workers
+    processes = max(1, processes-2)
+    queue_in = Queue(maxsize=processes)
+    queue_out = Queue()
+    workers = [
+        Process(target=sort_matches_by_protein,
+                args=(accessions, queue_in, queue_out, tmpdir))
+        for _ in range(processes)
+    ]
+    for w in workers:
+        w.start()
+
+    # Get protein matches (unsorted)
+    chunk = []
+    matches = []
+    for row in iter_matches(con, schema, order=False):
+        protein_acc = row[0]
+        method_acc = row[1]
+        if row[2] and row[2] != method_acc:
+            model_acc = row[2]
+        else:
+            # TODO: allow model ac to be NULL
+            model_acc = None
+
+        pos_start = int(row[3])
+        pos_end = int(row[4])
+        fragments = row[5]
+        method_dbcode = row[6]
+        method_type = row[7]
+        length = math.floor(row[8])
+        is_fragment = row[9] == 'Y'
+        prot_dbcode = row[10]
+        desc_id = row[11]
+        left_num = row[12]
+
+        # Add all matches to the MATCH table
+        matches.append((
+            protein_acc, method_acc, model_acc, pos_start, pos_end,
+            method_dbcode, fragments
+        ))
+        if len(matches) == BULK_INSERT_SIZE:
+            con.executemany(
+                """
+                INSERT /*+APPEND*/ INTO {}.MATCH (
+                    PROTEIN_AC, METHOD_AC, MODEL_AC,
+                    POS_FROM, POS_TO, DBCODE, FRAGMENTS
+                )
+                VALUES (:1, :2, :3, :4, :5, :6, :7)
+                """.format(schema),
+                matches
+            )
+            con.commit()
+            matches = []
+
+        if not is_fragment:
+            # Keep matches when the protein is not a fragment
+            chunk.append((protein_acc, prot_dbcode, length, desc_id, left_num,
+                          method_acc, method_type, pos_start, pos_end))
+
+            if len(chunk) == 1000:
+                queue_in.put(chunk)
+                chunk = []
+
+    if matches:
+        con.executemany(
+            """
+            INSERT /*+APPEND*/ INTO {}.MATCH (
+                PROTEIN_AC, METHOD_AC, MODEL_AC,
+                POS_FROM, POS_TO, DBCODE, FRAGMENTS
+            )
+            VALUES (:1, :2, :3, :4, :5, :6, :7)
+            """.format(schema),
+            matches
+        )
+        con.commit()
+        matches = []
+
+    if chunk:
+        queue_in.put(chunk)
+        chunk = []
+
+    for _ in workers:
+        queue_in.put(None)
+
+    organisers = [
+        io.Organiser(accessions, path=queue_out.get())
+        for _ in workers
+    ]
+
+    for w in workers:
+        w.join()
+
+    for key in accessions:
+        proteins = organisers[0].merge(key)
+
+        for o in organisers[1:]:
+            for k, v in o.merge(key):
+                if k in proteins:
+                    proteins[k] += v
+                else:
+                    proteins[k] = v
+
+
+
 
 
 def copy_schema(dsn, schema):
