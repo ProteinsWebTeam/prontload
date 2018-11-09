@@ -69,7 +69,7 @@ def load_signatures(dsn, schema):
             CANDIDATE CHAR(1) NOT NULL,
             DESCRIPTION VARCHAR2(220),
             SIG_TYPE CHAR(1),
-            PROTEIN_COUNT NUMBER(8) NOT NULL DEFAULT 0
+            PROTEIN_COUNT NUMBER(8) DEFAULT 0 NOT NULL
         ) NOLOGGING
         """.format(schema)
     )
