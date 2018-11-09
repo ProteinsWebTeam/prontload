@@ -1518,6 +1518,7 @@ def _load_matches(dsn, schema, **kwargs):
             """.format(schema)
     ):
         if cnt == bucket_size:
+            logging.info(len(accessions)*bucket_size)
             accessions.append(row[0])
             cnt = 1
         else:
