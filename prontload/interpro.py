@@ -1505,6 +1505,9 @@ def _load_matches(dsn, schema, **kwargs):
     max_gap = kwargs.get("max_gap", 20)
     tmpdir = kwargs.get("tmpdir")
 
+    if tmpdir:
+        os.makedirs(tmpdir, exist_ok=True)
+
     # Get protein accessions, to group them by accession later
     accessions = []
     bucket_size = 1000000
@@ -1514,6 +1517,7 @@ def _load_matches(dsn, schema, **kwargs):
             """
             SELECT PROTEIN_AC 
             FROM {}.PROTEIN 
+            WHERE FRAGMENT = 'N'
             ORDER BY PROTEIN_AC
             """.format(schema)
     ):
