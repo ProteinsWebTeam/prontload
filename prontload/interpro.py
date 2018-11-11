@@ -1543,7 +1543,7 @@ def _load_matches(dsn, schema, **kwargs):
     # Get protein matches (unsorted)
     chunk = []
     matches = []
-    n_proteins = 0
+    cnt = 0
     ts = time.time()
     for row in iter_matches(con, schema, order=False):
         protein_acc = row[0]
@@ -1594,11 +1594,16 @@ def _load_matches(dsn, schema, **kwargs):
                 queue_in.put(chunk)
                 chunk = []
 
-        n_proteins += 1
-        if not n_proteins % 1000000:
-            logging.info("{:>12} ({:.0f} proteins/sec)".format(
-                n_proteins,
-                n_proteins // (time.time() - ts)
+        cnt += 1
+        if cnt == 1:
+            logging.info(
+                "starting after {:.0f} seconds".format(time.time()-ts)
+            )
+            ts = time.time()
+        elif not cnt % 10000000:
+            logging.info("{:>12} ({:.0f} matches/sec)".format(
+                cnt,
+                cnt // (time.time() - ts)
             ))
 
     if matches:
@@ -1619,9 +1624,9 @@ def _load_matches(dsn, schema, **kwargs):
         queue_in.put(chunk)
         chunk = []
 
-    logging.info("{:>12} ({:.0f} proteins/sec)".format(
-        n_proteins,
-        n_proteins // (time.time() - ts)
+    logging.info("{:>12} ({:.0f} matches/sec)".format(
+        cnt,
+        cnt // (time.time() - ts)
     ))
 
     for _ in workers:
@@ -1635,7 +1640,7 @@ def _load_matches(dsn, schema, **kwargs):
     for w in workers:
         w.join()
 
-    n_proteins = 0
+    cnt = 0
     ts = time.time()
     for key in accessions:
         proteins = organisers[0].merge(key)
@@ -1694,16 +1699,16 @@ def _load_matches(dsn, schema, **kwargs):
 
             t = (protein_acc, prot_dbcode, length, desc_id, left_num, matches)
 
-            n_proteins += 1
-            if not n_proteins % 1000000:
+            cnt += 1
+            if not cnt % 1000000:
                 logging.info("{:>12} ({:.0f} proteins/sec)".format(
-                    n_proteins,
-                    n_proteins // (time.time() - ts)
+                    cnt,
+                    cnt // (time.time() - ts)
                 ))
 
     logging.info("{:>12} ({:.0f} proteins/sec)".format(
-        n_proteins,
-        n_proteins // (time.time() - ts)
+        cnt,
+        cnt // (time.time() - ts)
     ))
 
 
