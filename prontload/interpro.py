@@ -1477,8 +1477,6 @@ def _load_matches(dsn, schema, **kwargs):
         os.makedirs(tmpdir, exist_ok=True)
 
     con = Connection(dsn)
-
-    logging.info("recreating MATCH/METHOD2PROTEIN tables")
     con.drop_table(schema, "MATCH")
     con.execute(
         """
@@ -1525,11 +1523,6 @@ def _load_matches(dsn, schema, **kwargs):
             """.format(schema)
     ):
         if cnt == PROTEIN_BUCKET_SIZE:
-            _cnt = len(accessions) * PROTEIN_BUCKET_SIZE
-            logging.info("{:>12} ({:.0f} proteins/sec)".format(
-                _cnt,
-                _cnt // (time.time() - ts)
-            ))
             accessions.append(row[0])
             cnt = 1
         else:
