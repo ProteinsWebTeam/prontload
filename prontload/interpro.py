@@ -361,8 +361,7 @@ class ProteinConsumer(Process):
                         organiser_taxa.add(method_ac, (rank, tax_id))
 
                     # UniProt descriptions
-                    if desc_id in s["names"]:
-                        organiser_names.add(method_ac, (desc_id, dbcode))
+                    organiser_names.add(method_ac, (desc_id, dbcode))
 
                 # _comparisons: match overlaps between signatures
                 for acc_1 in _comparisons:
