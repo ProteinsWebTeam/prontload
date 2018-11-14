@@ -18,8 +18,6 @@ from .oracledb import Connection
 
 BULK_INSERT_SIZE = 100000
 MATCH_QUEUE_CHUNK_SIZE = 1000000
-METHOD_BUCKET_SIZE = 1000
-PROTEIN_BUCKET_SIZE = 1000000
 PROTEIN_QUEUE_CHUNK_SIZE = 10000
 
 
@@ -279,6 +277,25 @@ def load_proteins(dsn, schema):
     con.grant("SELECT", schema, "PROTEIN", "INTERPRO_SELECT")
 
 
+def chunk_signatures(con, schema, size=1000):
+    accessions = []
+    cnt = size
+    for row in con.get(
+            """
+                SELECT METHOD_AC
+                FROM {}.METHOD
+                ORDER BY METHOD_AC
+            """.format(schema)
+    ):
+        if cnt == size:
+            accessions.append(row[0])
+            cnt = 1
+        else:
+            cnt += 1
+
+    return accessions
+
+
 class ProteinConsumer(Process):
     def __init__(self, dsn, schema, max_gap, queue_in, queue_out, **kwargs):
         super().__init__()
@@ -287,29 +304,15 @@ class ProteinConsumer(Process):
         self.max_gap = max_gap
         self.queue_in = queue_in
         self.queue_out = queue_out
-        self.tmpdir = kwargs.get("tmpdir")
+        self.tmpdir = kwargs.get("dir")
 
     def run(self):
         con = Connection(self.dsn)
 
         # Get signatures
-        accessions = []
-        cnt = METHOD_BUCKET_SIZE
-        for row in con.get(
-            """
-                SELECT METHOD_AC
-                FROM {}.METHOD
-                ORDER BY METHOD_AC
-            """.format(self.schema)
-        ):
-            if cnt == METHOD_BUCKET_SIZE:
-                accessions.append(row[0])
-                cnt = 1
-            else:
-                cnt += 1
-
-        organiser_names = io.Organiser(accessions, tmpdir=self.tmpdir)
-        organiser_taxa = io.Organiser(accessions, tmpdir=self.tmpdir)
+        accessions = chunk_signatures(con, self.schema)
+        organiser_names = io.Organiser(accessions, dir=self.tmpdir)
+        organiser_taxa = io.Organiser(accessions, dir=self.tmpdir)
 
         # Get lineages for the METHOD_TAXA table
         ranks = {
@@ -1144,29 +1147,6 @@ def iter_matches(con, schema, order=True):
         yield row
 
 
-def iter_matches_new(con, schema):
-    query = """
-            SELECT
-              MA.PROTEIN_AC,
-              MA.METHOD_AC,
-              MA.POS_FROM,
-              MA.POS_TO,
-              MA.DBCODE,
-              ME.SIG_TYPE
-            FROM INTERPRO.MATCH MA
-              INNER JOIN INTERPRO.METHOD ME
-                ON MA.METHOD_AC = ME.METHOD_AC
-            WHERE MA.PROTEIN_AC IN (
-              SELECT PROTEIN_AC
-              FROM INTERPRO.PROTEIN
-              WHERE FRAGMENT = 'N'
-            )
-    """.format(schema)
-
-    for row in con.get(query):
-        yield row
-
-
 def load_matches(dsn, schema, **kwargs):
     n_buckets = kwargs.get("buckets", 100)
     chunk_size = kwargs.get("chunk_size", 100000)
@@ -1475,8 +1455,107 @@ def load_matches(dsn, schema, **kwargs):
     aggreator.join()
 
 
-def sort_matches_by_protein(accessions, queue_in, queue_out, tmpdir=None):
-    organiser = io.Organiser(accessions, tmpdir=tmpdir)
+def insert_matches(dsn, schema):
+    con = Connection(dsn)
+
+    # Dropping (if exists) and recreating table
+    con.drop_table(schema, "MATCH")
+    con.execute(
+        """
+        CREATE TABLE {}.MATCH
+        (
+            PROTEIN_AC VARCHAR2(15) NOT NULL,
+            METHOD_AC VARCHAR2(25) NOT NULL,
+            DBCODE CHAR(1) NOT NULL,
+            MODEL_AC VARCHAR2(25),
+            POS_FROM NUMBER(5) NOT NULL,
+            POS_TO NUMBER(5) NOT NULL,
+            FRAGMENTS VARCHAR2(200) DEFAULT NULL
+        ) NOLOGGING
+        """.format(schema)
+    )
+
+    """
+    Insert directly signature matches and MobiDB-lite matches
+    For some signature matches, the HMM model accession 
+        is the signature accession itself: in such cases, use NULL
+    """
+    con.execute(
+        """
+        INSERT /*+APPEND*/ INTO {}.MATCH
+        SELECT
+          PROTEIN_AC,
+          METHOD_AC,
+          DBCODE,
+          CASE
+            WHEN MODEL_AC IS NOT NULL AND MODEL_AC != METHOD_AC THEN MODEL_AC
+            ELSE NULL
+          END AS MODEL_AC,
+          POS_FROM,
+          POS_TO,
+          FRAGMENTS
+        FROM INTERPRO.MATCH
+        UNION ALL
+        SELECT
+          PROTEIN_AC,
+          METHOD_AC,
+          DBCODE,
+          NULL,
+          POS_FROM,
+          POS_TO,
+          NULL
+        FROM INTERPRO.FEATURE_MATCH
+        WHERE DBCODE = 'g'
+        """.format(schema)
+    )
+    con.commit()
+
+    # Finalizing table
+    con.execute(
+        """
+        CREATE INDEX I_MATCH$PROTEIN
+        ON {}.MATCH (PROTEIN_AC) NOLOGGING
+        """.format(schema)
+    )
+    con.execute(
+        """
+        CREATE INDEX I_MATCH$DBCODE
+        ON {}.MATCH (DBCODE) NOLOGGING
+        """.format(schema)
+    )
+    con.optimize_table(schema, "MATCH", cascade=True)
+    con.grant("SELECT", schema, "MATCH", "INTERPRO_SELECT")
+    logging.info("MATCH table ready")
+
+
+def dump_proteins(con, schema, store, size=1000000):
+    accessions = []
+    cnt = size
+    for row in con.get(
+            """
+            SELECT 
+              P.PROTEIN_AC, P.LEN, P.DBCODE, D.DESC_ID, NVL(E.LEFT_NUMBER, 0)
+            FROM {0}.PROTEIN P
+            INNER JOIN {0}.ETAXI E 
+              ON P.TAX_ID = E.TAX_ID
+            INNER JOIN {0}.PROTEIN_DESC D
+              ON P.PROTEIN_AC = D.PROTEIN_AC
+            WHERE P.FRAGMENT = 'N'
+            ORDER BY P.PROTEIN_AC
+            """.format(schema)
+    ):
+        store.add(row)
+        if cnt == size:
+            accessions.append(row[0])
+            cnt = 1
+        else:
+            cnt += 1
+
+    return accessions
+
+
+def _dump_matches(accessions, queue_in, queue_out, tmpdir=None):
+    organiser = io.Organiser(accessions, dir=tmpdir)
 
     while True:
         chunk = queue_in.get()
@@ -1499,120 +1578,45 @@ def sort_matches_by_protein(accessions, queue_in, queue_out, tmpdir=None):
     queue_out.put(organiser.path)
 
 
-def _insert_matches(con, schema, matches):
-    con.executemany(
-        """
-        INSERT /*+APPEND*/ INTO {}.MATCH (
-            PROTEIN_AC, METHOD_AC, MODEL_AC,
-            POS_FROM, POS_TO, DBCODE, FRAGMENTS
-        )
-        VALUES (:1, :2, :3, :4, :5, :6, :7)
-        """.format(schema),
-        matches
-    )
-    con.commit()
-
-
-def load_matches_new(dsn, schema, **kwargs):
-    processes = kwargs.get("processes", 3)
-    max_gap = kwargs.get("max_gap", 20)
-    tmpdir = kwargs.get("tmpdir")
-
-    if tmpdir:
-        os.makedirs(tmpdir, exist_ok=True)
-
-    con = Connection(dsn)
-    con.drop_table(schema, "MATCH")
-    con.execute(
-        """
-        CREATE TABLE {}.MATCH
-        (
-            PROTEIN_AC VARCHAR2(15) NOT NULL,
-            METHOD_AC VARCHAR2(25) NOT NULL,
-            MODEL_AC VARCHAR2(25),
-            POS_FROM NUMBER(5) NOT NULL,
-            POS_TO NUMBER(5) NOT NULL,
-            DBCODE CHAR(1) NOT NULL,
-            FRAGMENTS VARCHAR2(200) DEFAULT NULL
-        ) NOLOGGING
-        """.format(schema)
-    )
-
-    con.drop_table(schema, "METHOD2PROTEIN")
-    con.execute(
-        """
-        CREATE TABLE {}.METHOD2PROTEIN
-        (
-            METHOD_AC VARCHAR2(25) NOT NULL,
-            PROTEIN_AC VARCHAR2(15) NOT NULL,
-            DBCODE CHAR(1) NOT NULL,
-            MD5 VARCHAR(32) NOT NULL,
-            LEN NUMBER(5) NOT NULL,
-            LEFT_NUMBER NUMBER NOT NULL,
-            DESC_ID NUMBER(10) NOT NULL
-        ) NOLOGGING
-        """.format(schema)
-    )
-
-    logging.info("dumping proteins")
-    fd, proteins_file = mkstemp(dir=tmpdir)
-    os.close(fd)
-
-    ts = time.time()
-    with io.ProteinIterator(proteins_file, "wb") as proteins:
-        query = """
-            SELECT 
-              P.PROTEIN_AC, P.LEN, P.DBCODE, D.DESC_ID, NVL(E.LEFT_NUMBER, 0)
-            FROM {0}.PROTEIN P
-            INNER JOIN {0}.ETAXI E 
-              ON P.TAX_ID = E.TAX_ID
-            INNER JOIN {0}.PROTEIN_DESC D
-              ON P.PROTEIN_AC = D.PROTEIN_AC
-            WHERE P.FRAGMENT = 'N'
-            ORDER BY P.PROTEIN_AC
-        """.format(schema)
-
-        chunks = []
-        cnt = PROTEIN_BUCKET_SIZE
-        for row in con.get(query):
-            proteins.add(row)
-
-            if cnt == PROTEIN_BUCKET_SIZE:
-                _cnt = len(chunks) * PROTEIN_BUCKET_SIZE
-                logging.info("{:>12} ({:.0f} proteins/sec)".format(
-                    _cnt,
-                    _cnt / (time.time() - ts)
-                ))
-                chunks.append(row[0])
-                cnt = 1
-            else:
-                cnt += 1
-
-    # Starting processes
-    processes = max(1, processes-1)  # -1 for the parent process
+def dump_matches(con, schema, chunks, processes, tmpdir=None):
     queue_in = Queue(maxsize=processes)
     queue_out = Queue()
     workers = [
-        Process(target=sort_matches_by_protein,
+        Process(target=_dump_matches,
                 args=(chunks, queue_in, queue_out, tmpdir))
         for _ in range(processes)
     ]
     for w in workers:
         w.start()
 
-    logging.info("dumping matches")
     chunk = []
     cnt = 0
-    ts = time.time()
-    for row in iter_matches_new(con, schema):
+    for row in con.get(
+            """
+            SELECT
+              MA.PROTEIN_AC,
+              MA.METHOD_AC,
+              MA.DBCODE,
+              ME.SIG_TYPE,
+              MA.POS_FROM,
+              MA.POS_TO
+            FROM INTERPRO.MATCH MA
+              INNER JOIN INTERPRO.METHOD ME
+                ON MA.METHOD_AC = ME.METHOD_AC
+            WHERE MA.PROTEIN_AC IN (
+              SELECT PROTEIN_AC
+              FROM INTERPRO.PROTEIN
+              WHERE FRAGMENT = 'N'
+            )
+            """.format(schema)
+    ):
         protein_acc = row[0]
         method_acc = row[1]
-        pos_start = int(row[2])
-        pos_end = int(row[3])
-        method_dbcode = row[4]
-        method_type = row[5]
-
-        chunk.append((protein_acc, method_acc, method_dbcode, method_type, 
+        method_dbcode = row[2]
+        method_type = row[3]
+        pos_start = int(row[4])
+        pos_end = int(row[5])
+        chunk.append((protein_acc, method_acc, method_dbcode, method_type,
                       pos_start, pos_end))
 
         if len(chunk) == MATCH_QUEUE_CHUNK_SIZE:
@@ -1621,21 +1625,15 @@ def load_matches_new(dsn, schema, **kwargs):
 
         cnt += 1
         if not cnt % 10000000:
-            logging.info("{:>12} ({:.0f} matches/sec)".format(
-                cnt,
-                cnt // (time.time() - ts)
-            ))
+            logging.info("{:>12}".format(cnt))
 
     if chunk:
         queue_in.put(chunk)
         chunk = []
 
-    logging.info("{:>12} ({:.0f} matches/sec)".format(
-        cnt,
-        cnt // (time.time() - ts)
-    ))
+    logging.info("{:>12}".format(cnt))
 
-    # Trigger merging in child-processes
+    # Trigger protein merging
     for _ in workers:
         queue_in.put(None)
 
@@ -1645,307 +1643,35 @@ def load_matches_new(dsn, schema, **kwargs):
         for _ in workers
     ]
 
+    # Join processes *after* the output queue is empty (avoid deadlock)
     for w in workers:
         w.join()
 
+    return organisers
+
+
+def process_proteins(dsn, con, schema, chunks, processes, max_gap, proteins,
+                     organisers, tmpdir=None):
+    queue_in = Queue(maxsize=processes)
+    queue_out = Queue()
+
+    """
+        Merging proteins:
+
+        We have N organisers, each with the same chunk keys (protein accessions)
+        e.g.:
+            Organiser #1    A   D   G   J ...
+            Organiser #2    A   D   G   J ...
+            ...
+
+        Organiser #1 and #2 may have matches for the same proteins,
+        so we are going to merge chunk by chunk (A, then D, then G, etc.).
+        """
     logging.info("processing proteins")
     workers = [
         ProteinConsumer(dsn, schema, max_gap, queue_in, queue_out,
-                        tmpdir=tmpdir)
-        for _ in workers
-    ]
-
-    for w in workers:
-        w.start()
-
-    """
-    Merging proteins:
-    
-    We have N organisers, each with the same chunk keys (protein accessions)
-    e.g.:
-        Organiser #1    A   D   G   J ...
-        Organiser #2    A   D   G   J ...
-        ...
-        
-    Organiser #1 and #2 may have matches for the same proteins,
-    so we are going to merge chunk by chunk (A, then D, then G, etc.).
-    """
-
-    cnt = 0
-    chunk = []
-    ts = time.time()
-    with io.ProteinIterator(proteins_file, "rb") as proteins:
-
-        for key in chunks:
-            # Get chunk from the first (merged) organiser
-            _proteins = organisers[0].load(key)
-
-            # Then incorporate subsequent (merged) organisers
-            for o in organisers[1:]:
-                for k, v in o.load(key).items():
-                    if k in _proteins:
-                        _proteins[k] += v
-                    else:
-                        _proteins[k] = v
-
-            # Now all proteins for the current chunk are merged
-            for protein_acc in sorted(_proteins):
-                while True:
-                    (acc, length, prot_dbcode,
-                     desc_id, left_num) = next(proteins)
-                    if acc == protein_acc:
-                        break
-
-                methods = {}
-                matches = []
-                for m in _proteins[protein_acc]:
-                    (method_acc, method_dbcode, method_type,
-                     pos_start, pos_end) = m
-
-                    if method_dbcode in ('F', 'V'):
-                        """
-                        PANTHER & PRINTS:
-                            Merge protein matches.
-                            If the signature is a family*, use the entire protein.
-    
-                            * all PANTHER signatures, almost all PRINTS signatures
-                        """
-                        if method_acc not in methods:
-                            if method_type == 'F':
-                                # Families: use the entire protein sequence
-                                methods[method_acc] = [(1, length)]
-                            else:
-                                methods[method_acc] = [(pos_start, pos_end)]
-                        elif method_type != 'F':
-                            # Only for non-families
-                            # (because families use the entire protein)
-                            methods[method_acc].append((pos_start, pos_end))
-                    else:
-                        matches.append((method_acc, pos_start, pos_end))
-
-                # Merge matches
-                for method_acc in methods:
-                    min_pos = None
-                    max_pos = None
-
-                    for pos_start, pos_end in methods[method_acc]:
-                        if min_pos is None or pos_start < min_pos:
-                            min_pos = pos_start
-                        if max_pos is None or pos_end > max_pos:
-                            max_pos = pos_end
-
-                    matches.append((method_acc, min_pos, max_pos))
-
-                chunk.append((protein_acc, prot_dbcode, length, desc_id,
-                              left_num, matches))
-
-                if len(chunk) == PROTEIN_QUEUE_CHUNK_SIZE:
-                    queue_in.put(chunk)
-                    chunk = []
-
-                cnt += 1
-                if not cnt % 1000000:
-                    logging.info("{:>12} ({:.0f} proteins/sec)".format(
-                        cnt,
-                        cnt // (time.time() - ts)
-                    ))
-
-    if chunk:
-        queue_in.put(chunk)
-        chunk = []
-
-    logging.info("{:>12} ({:.0f} proteins/sec)".format(
-        cnt,
-        cnt // (time.time() - ts)
-    ))
-
-    for _ in workers:
-        queue_in.put(None)
-
-    for _ in workers:
-        queue_out.get()
-
-    for w in workers:
-        w.join()
-
-
-def _load_matches(dsn, schema, **kwargs):
-    processes = kwargs.get("processes", 3)
-    max_gap = kwargs.get("max_gap", 20)
-    tmpdir = kwargs.get("tmpdir")
-
-    if tmpdir:
-        os.makedirs(tmpdir, exist_ok=True)
-
-    con = Connection(dsn)
-    con.drop_table(schema, "MATCH")
-    con.execute(
-        """
-        CREATE TABLE {}.MATCH
-        (
-            PROTEIN_AC VARCHAR2(15) NOT NULL,
-            METHOD_AC VARCHAR2(25) NOT NULL,
-            MODEL_AC VARCHAR2(25),
-            POS_FROM NUMBER(5) NOT NULL,
-            POS_TO NUMBER(5) NOT NULL,
-            DBCODE CHAR(1) NOT NULL,
-            FRAGMENTS VARCHAR2(200) DEFAULT NULL
-        ) NOLOGGING
-        """.format(schema)
-    )
-
-    con.drop_table(schema, "METHOD2PROTEIN")
-    con.execute(
-        """
-        CREATE TABLE {}.METHOD2PROTEIN
-        (
-            METHOD_AC VARCHAR2(25) NOT NULL,
-            PROTEIN_AC VARCHAR2(15) NOT NULL,
-            DBCODE CHAR(1) NOT NULL,
-            MD5 VARCHAR(32) NOT NULL,
-            LEN NUMBER(5) NOT NULL,
-            LEFT_NUMBER NUMBER NOT NULL,
-            DESC_ID NUMBER(10) NOT NULL
-        ) NOLOGGING
-        """.format(schema)
-    )
-
-    # Get protein accessions, to group them by accession later
-    logging.info("chunking proteins")
-    accessions = []
-    cnt = PROTEIN_BUCKET_SIZE
-    for row in con.get(
-            """
-            SELECT PROTEIN_AC
-            FROM {}.PROTEIN
-            WHERE FRAGMENT = 'N'
-            ORDER BY PROTEIN_AC
-            """.format(schema)
-    ):
-        if cnt == PROTEIN_BUCKET_SIZE:
-            accessions.append(row[0])
-            cnt = 1
-        else:
-            cnt += 1
-
-    logging.info("dumping matches")
-
-    # Create workers
-    _processes = max(1, processes-1)
-    queue_in = Queue(maxsize=_processes)
-    queue_out = Queue()
-    workers = [
-        Process(target=sort_matches_by_protein,
-                args=(accessions, queue_in, queue_out, tmpdir))
-        for _ in range(_processes)
-    ]
-    for w in workers:
-        w.start()
-
-    # Get protein matches (unsorted)
-    chunk = []
-    matches = []
-    cnt = 0
-    ts = time.time()
-    for row in iter_matches(con, schema, order=False):
-        protein_acc = row[0]
-        method_acc = row[1]
-        if row[2] and row[2] != method_acc:
-            model_acc = row[2]
-        else:
-            model_acc = None
-
-        pos_start = int(row[3])
-        pos_end = int(row[4])
-        fragments = row[5]
-        method_dbcode = row[6]
-        method_type = row[7]
-        length = math.floor(row[8])
-        is_fragment = row[9] == 'Y'
-        prot_dbcode = row[10]
-        desc_id = row[11]
-        left_num = row[12]
-
-        # Add all matches to the MATCH table
-        matches.append((
-            protein_acc, method_acc, model_acc, pos_start, pos_end,
-            method_dbcode, fragments
-        ))
-        if len(matches) == BULK_INSERT_SIZE:
-            con.executemany(
-                """
-                INSERT /*+APPEND*/ INTO {}.MATCH (
-                    PROTEIN_AC, METHOD_AC, MODEL_AC,
-                    POS_FROM, POS_TO, DBCODE, FRAGMENTS
-                )
-                VALUES (:1, :2, :3, :4, :5, :6, :7)
-                """.format(schema),
-                matches
-            )
-            con.commit()
-            matches = []
-
-        if not is_fragment:
-            # Keep matches when the protein is not a fragment
-            chunk.append((protein_acc, prot_dbcode, length, desc_id, left_num,
-                          method_acc, method_dbcode, method_type, pos_start,
-                          pos_end))
-
-            if len(chunk) == QUEUE_CHUNK_SIZE:
-                queue_in.put(chunk)
-                chunk = []
-
-        cnt += 1
-        if cnt == 1:
-            logging.info(
-                "starting after {:.0f} seconds".format(time.time()-ts)
-            )
-            ts = time.time()
-        elif not cnt % 10000000:
-            logging.info("{:>12} ({:.0f} matches/sec)".format(
-                cnt,
-                cnt // (time.time() - ts)
-            ))
-
-    if matches:
-        con.executemany(
-            """
-            INSERT /*+APPEND*/ INTO {}.MATCH (
-                PROTEIN_AC, METHOD_AC, MODEL_AC,
-                POS_FROM, POS_TO, DBCODE, FRAGMENTS
-            )
-            VALUES (:1, :2, :3, :4, :5, :6, :7)
-            """.format(schema),
-            matches
-        )
-        con.commit()
-        matches = []
-
-    if chunk:
-        queue_in.put(chunk)
-        chunk = []
-
-    logging.info("{:>12} ({:.0f} matches/sec)".format(
-        cnt,
-        cnt // (time.time() - ts)
-    ))
-
-    for _ in workers:
-        queue_in.put(None)
-
-    organisers = [
-        io.Organiser(accessions, path=queue_out.get())
-        for _ in workers
-    ]
-
-    for w in workers:
-        w.join()
-
-    logging.info("processing proteins")
-    _processes = max(1, processes-1)
-    workers = [
-        ProteinConsumer(dsn, schema, max_gap, queue_in, queue_out, tmpdir=tmpdir)
-        for _ in range(_processes)
+                        dir=tmpdir)
+        for _ in range(processes)
     ]
 
     for w in workers:
@@ -1954,28 +1680,35 @@ def _load_matches(dsn, schema, **kwargs):
     cnt = 0
     chunk = []
     ts = time.time()
-    for key in accessions:
-        proteins = organisers[0].merge(key)
+    protein_iterator = iter(proteins)
+    for key in chunks:
+        # Get chunk from the first (merged) organiser
+        _proteins = organisers[0].load(key)
 
+        # Then incorporate subsequent (merged) organisers
         for o in organisers[1:]:
-            for k, v in o.merge(key).items():
-                if k in proteins:
-                    proteins[k] += v
+            for k, v in o.load(key).items():
+                if k in _proteins:
+                    _proteins[k] += v
                 else:
-                    proteins[k] = v
+                    _proteins[k] = v
 
-        for protein_acc in proteins:
+        # Now all proteins for the current chunk are merged
+        for protein_acc in sorted(_proteins):
+            while True:
+                # Find protein in ProteinStore
+                (acc, length, prot_dbcode,
+                 desc_id, left_num) = next(protein_iterator)
+                if acc == protein_acc:
+                    break
+
             methods = {}
             matches = []
-            prot_dbcode = None
-            length = None
-            desc_id = None
-            left_num = None
-            for m in proteins[protein_acc]:
-                (prot_dbcode, length, desc_id, left_num, method_acc,
-                 method_dbcode, method_type, pos_start, pos_end) = m
+            for m in _proteins[protein_acc]:
+                (method_acc, method_dbcode, method_type,
+                 pos_start, pos_end) = m
 
-                if method_dbcode in ("F", "V"):
+                if method_dbcode in ('F', 'V'):
                     """
                     PANTHER & PRINTS:
                         Merge protein matches.
@@ -1984,12 +1717,12 @@ def _load_matches(dsn, schema, **kwargs):
                         * all PANTHER signatures, almost all PRINTS signatures
                     """
                     if method_acc not in methods:
-                        if method_type == "F":
+                        if method_type == 'F':
                             # Families: use the entire protein sequence
                             methods[method_acc] = [(1, length)]
                         else:
                             methods[method_acc] = [(pos_start, pos_end)]
-                    elif method_type != "F":
+                    elif method_type != 'F':
                         # Only for non-families
                         # (because families use the entire protein)
                         methods[method_acc].append((pos_start, pos_end))
@@ -2009,8 +1742,10 @@ def _load_matches(dsn, schema, **kwargs):
 
                 matches.append((method_acc, min_pos, max_pos))
 
-            chunk.append((protein_acc, prot_dbcode, length, desc_id, left_num, matches))
-            if len(chunk) == QUEUE_CHUNK_SIZE:
+            chunk.append((protein_acc, prot_dbcode, length, desc_id,
+                          left_num, matches))
+
+            if len(chunk) == PROTEIN_QUEUE_CHUNK_SIZE:
                 queue_in.put(chunk)
                 chunk = []
 
@@ -2033,11 +1768,95 @@ def _load_matches(dsn, schema, **kwargs):
     for _ in workers:
         queue_in.put(None)
 
+    signatures = {}
+    comparisons = {}
+    name_organisers = []
+    taxon_organisers = []
+    chunks = chunk_signatures(con, schema)
     for _ in workers:
-        queue_out.get()
+        _signatures, _comparisons, path1, path2 = queue_out.get()
+
+        # Merge signatures and comparisons
+        for acc in _signatures:
+            if acc in signatures:
+                for k, v in _signatures[acc].items():
+                    signatures[acc][k] += v
+            else:
+                signatures[acc] = _signatures[acc]
+                continue
+
+        for acc1 in _comparisons:
+            if acc1 in comparisons:
+                d = comparisons[acc1]
+            else:
+                comparisons[acc1] = _comparisons[acc1]
+                continue
+
+            for acc2 in _comparisons[acc1]:
+                if acc2 in d:
+                    for k, v in _comparisons[acc1][acc2].items():
+                        d[acc2][k] += v
+                else:
+                    d[acc2] = _comparisons[acc1][acc2]
+
+        name_organisers.append(io.Organiser(chunks, path=path1))
+        taxon_organisers.append(io.Organiser(chunks, path=path2))
 
     for w in workers:
         w.join()
+
+    return signatures, comparisons, name_organisers, taxon_organisers
+
+
+def load_matches_new(dsn, schema, **kwargs):
+    processes = kwargs.get("processes", 3)
+    max_gap = kwargs.get("max_gap", 20)
+    tmpdir = kwargs.get("tmpdir")
+
+    if tmpdir:
+        os.makedirs(tmpdir, exist_ok=True)
+
+    # con.drop_table(schema, "METHOD2PROTEIN")
+    # con.execute(
+    #     """
+    #     CREATE TABLE {}.METHOD2PROTEIN
+    #     (
+    #         METHOD_AC VARCHAR2(25) NOT NULL,
+    #         PROTEIN_AC VARCHAR2(15) NOT NULL,
+    #         DBCODE CHAR(1) NOT NULL,
+    #         MD5 VARCHAR(32) NOT NULL,
+    #         LEN NUMBER(5) NOT NULL,
+    #         LEFT_NUMBER NUMBER NOT NULL,
+    #         DESC_ID NUMBER(10) NOT NULL
+    #     ) NOLOGGING
+    #     """.format(schema)
+    # )
+
+    logging.info("dumping proteins")
+    proteins = io.ProteinStore(dir=tmpdir, mode="wb")
+    con = Connection(dsn)
+    chunks = dump_proteins(con, schema, proteins)
+
+    # Creating MATCH table (in a separate process)
+    loader = Process(target=insert_matches, args=(dsn, schema))
+    loader.start()
+
+    # -1 for loader, -1 for main process
+    processes = max(1, processes - 2)
+
+    # Dumping matches (non-fragment proteins only)
+    logging.info("dumping matches")
+    organisers = dump_matches(con, schema, chunks, processes, tmpdir)
+
+    logging.info("processing proteins")
+    res = process_proteins(dsn, con, schema, chunks, processes, max_gap,
+                           proteins, organisers, tmpdir)
+    signatures, comparisons, name_organisers, taxon_organisers = res
+
+    proteins.close()  # close/delete protein store (don't need any more)
+
+    logging.info("making predictions")
+
 
 
 def copy_schema(dsn, schema):
