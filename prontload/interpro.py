@@ -1583,6 +1583,8 @@ def load_matches_new(dsn, schema, **kwargs):
     logging.info("loading proteins")
     proteins, chunks = _load_proteins(con, schema)
 
+    _ = input("press any key:")
+
     # Starting processes
     processes = max(1, processes-1)  # -1 for the parent process
     queue_in = Queue(maxsize=processes)
