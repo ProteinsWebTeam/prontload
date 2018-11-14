@@ -4,15 +4,15 @@
 import bisect
 import os
 import pickle
-from tempfile import mkdtemp
+from tempfile import mkdtemp, mkstemp
 
 
 class Organiser(object):
-    def __init__(self, keys, path=None, tmpdir=None):
+    def __init__(self, keys, path=None, dir=None):
         self.keys = keys
 
         if path is None:
-            self.path = mkdtemp(dir=tmpdir)
+            self.path = mkdtemp(dir=dir)
         else:
             self.path = path
             os.makedirs(self.path, exist_ok=True)
@@ -78,35 +78,32 @@ class Organiser(object):
             return pickle.load(fh)
 
 
-class ProteinIterator(object):
-    def __init__(self, filepath, mode="rb"):
-        self.filepath = filepath
-        self.mode = mode
-        self.fh = None
+class ProteinStore(object):
+    def __init__(self, path=None, dir=None, mode="rb"):
+        if path:
+            self.path = path
+        else:
+            fd, self.path = mkstemp(dir=dir)
+            os.close(fd)
+            os.remove(self.path)
+
+        self.fh = open(self.path, mode)
 
     def add(self, obj):
+        # Expects `self.path` to be open for writing
         pickle.dump(obj, self.fh)
-
-    def open(self, mode="rb"):
-        self.close()
-        self.fh = open(self.filepath, mode)
 
     def close(self):
         if self.fh is not None:
             self.fh.close()
             self.fh = None
 
-    def __enter__(self):
-        self.open(self.mode)
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
-
     def __del__(self):
         self.close()
 
     def __iter__(self):
+        self.close()
+        self.fh = open(self.path, "rb")
         return self
 
     def __next__(self):
