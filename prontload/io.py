@@ -82,10 +82,12 @@ class ProteinStore(object):
     def __init__(self, path=None, dir=None, mode="rb"):
         if path:
             self.path = path
+            self.delete = False
         else:
             fd, self.path = mkstemp(dir=dir)
             os.close(fd)
             os.remove(self.path)
+            self.delete = True
 
         self.fh = open(self.path, mode)
 
@@ -97,6 +99,10 @@ class ProteinStore(object):
         if self.fh is not None:
             self.fh.close()
             self.fh = None
+
+        if self.delete and self.path is not None:
+            os.remove(self.path)
+            self.path = None
 
     def __del__(self):
         self.close()
