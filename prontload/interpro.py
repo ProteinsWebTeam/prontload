@@ -1714,7 +1714,7 @@ def load_matches_new(dsn, schema, **kwargs):
                     (method_acc, method_dbcode, method_type,
                      pos_start, pos_end) = m
 
-                    if method_dbcode in ("F", "V"):
+                    if method_dbcode in ('F', 'V'):
                         """
                         PANTHER & PRINTS:
                             Merge protein matches.
@@ -1723,12 +1723,12 @@ def load_matches_new(dsn, schema, **kwargs):
                             * all PANTHER signatures, almost all PRINTS signatures
                         """
                         if method_acc not in methods:
-                            if method_type == "F":
+                            if method_type == 'F':
                                 # Families: use the entire protein sequence
                                 methods[method_acc] = [(1, length)]
                             else:
                                 methods[method_acc] = [(pos_start, pos_end)]
-                        elif method_type != "F":
+                        elif method_type != 'F':
                             # Only for non-families
                             # (because families use the entire protein)
                             methods[method_acc].append((pos_start, pos_end))
