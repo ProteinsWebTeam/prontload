@@ -1531,31 +1531,28 @@ def _load_proteins(con, schema):
         INNER JOIN {0}.PROTEIN_DESC D
           ON P.PROTEIN_AC = D.PROTEIN_AC
         WHERE P.FRAGMENT = 'N'
+        ORDER BY P.PROTEIN_AC
     """.format(schema)
 
     proteins = {}
+    chunks = []
+    cnt = PROTEIN_BUCKET_SIZE
     for row in con.get(query):
-        proteins[row[0]] = {
+        accession = row[0]
+        proteins[accession] = {
             "length": row[1],
             "dbcode": row[2],
             "desc_id": row[3],
             "left_num": row[4]
         }
 
-    return proteins
-
-
-def _chunk_proteins(proteins):
-    chunks = []
-    cnt = PROTEIN_BUCKET_SIZE
-    for acc in sorted(proteins):
         if cnt == PROTEIN_BUCKET_SIZE:
-            chunks.append(acc)
+            chunks.append(accession)
             cnt = 1
         else:
             cnt += 1
 
-    return chunks
+    return proteins, chunks
 
 
 def _append_matches(con, schema, matches):
@@ -1584,10 +1581,7 @@ def load_matches_new(dsn, schema, **kwargs):
     _recreate_tables(con, schema)
 
     logging.info("loading proteins")
-    proteins = _load_proteins(con, schema)
-
-    logging.info("chunking proteins")
-    chunks = _chunk_proteins(proteins)
+    proteins, chunks = _load_proteins(con, schema)
 
     # Starting processes
     processes = max(1, processes-1)  # -1 for the parent process
