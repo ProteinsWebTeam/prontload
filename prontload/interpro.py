@@ -1512,7 +1512,6 @@ def _load_matches(dsn, schema, **kwargs):
     logging.info("chunking proteins")
     accessions = []
     cnt = PROTEIN_BUCKET_SIZE
-    ts = time.time()
     for row in con.get(
             """
             SELECT PROTEIN_AC
