@@ -17,9 +17,10 @@ from .oracledb import Connection
 
 
 BULK_INSERT_SIZE = 100000
-PROTEIN_BUCKET_SIZE = 1000000
-QUEUE_CHUNK_SIZE = 10000
+MATCH_QUEUE_CHUNK_SIZE = 1000000
 METHOD_BUCKET_SIZE = 1000
+PROTEIN_BUCKET_SIZE = 1000000
+PROTEIN_QUEUE_CHUNK_SIZE = 10000
 
 
 def create_synonyms(dsn, src, dst, tables=[]):
@@ -1143,15 +1144,13 @@ def iter_matches(con, schema, order=True):
         yield row
 
 
-def iter_matches_new(con, schema, fragment='N'):
+def iter_matches_new(con, schema):
     query = """
             SELECT
               MA.PROTEIN_AC,
               MA.METHOD_AC,
-              MA.MODEL_AC,
               MA.POS_FROM,
               MA.POS_TO,
-              MA.FRAGMENTS,
               MA.DBCODE,
               ME.SIG_TYPE
             FROM INTERPRO.MATCH MA
@@ -1160,11 +1159,11 @@ def iter_matches_new(con, schema, fragment='N'):
             WHERE MA.PROTEIN_AC IN (
               SELECT PROTEIN_AC
               FROM INTERPRO.PROTEIN
-              WHERE FRAGMENT = :1
+              WHERE FRAGMENT = 'N'
             )
     """.format(schema)
 
-    for row in con.get(query, fragment):
+    for row in con.get(query):
         yield row
 
 
@@ -1489,6 +1488,14 @@ def sort_matches_by_protein(accessions, queue_in, queue_out, tmpdir=None):
 
         organiser.dump()
 
+    size_before, size_after = organiser.merge()
+
+    logging.info("{}: {} bytes (before); {} bytes (after)".format(
+        os.path.basename(organiser.path),
+        size_before,
+        size_after
+    ))
+
     queue_out.put(organiser.path)
 
 
@@ -1595,36 +1602,20 @@ def load_matches_new(dsn, schema, **kwargs):
 
     logging.info("dumping matches")
     chunk = []
-    matches = []
     cnt = 0
     ts = time.time()
-    for row in iter_matches_new(con, schema, fragment='N'):
+    for row in iter_matches_new(con, schema):
         protein_acc = row[0]
         method_acc = row[1]
-        if row[2] and row[2] != method_acc:
-            model_acc = row[2]
-        else:
-            model_acc = None
-
-        pos_start = int(row[3])
-        pos_end = int(row[4])
-        fragments = row[5]
-        method_dbcode = row[6]
-        method_type = row[7]
-
-        # Add all matches to the MATCH table
-        matches.append((
-            protein_acc, method_acc, model_acc, pos_start, pos_end,
-            method_dbcode, fragments
-        ))
-        if len(matches) == BULK_INSERT_SIZE:
-            _insert_matches(con, schema, matches)
-            matches = []
+        pos_start = int(row[2])
+        pos_end = int(row[3])
+        method_dbcode = row[4]
+        method_type = row[5]
 
         chunk.append((protein_acc, method_acc, method_dbcode, method_type, 
                       pos_start, pos_end))
 
-        if len(chunk) == QUEUE_CHUNK_SIZE:
+        if len(chunk) == MATCH_QUEUE_CHUNK_SIZE:
             queue_in.put(chunk)
             chunk = []
 
@@ -1635,10 +1626,6 @@ def load_matches_new(dsn, schema, **kwargs):
                 cnt // (time.time() - ts)
             ))
 
-    if matches:
-        _insert_matches(con, schema, matches)
-        matches = []
-
     if chunk:
         queue_in.put(chunk)
         chunk = []
@@ -1648,6 +1635,7 @@ def load_matches_new(dsn, schema, **kwargs):
         cnt // (time.time() - ts)
     ))
 
+    # Trigger merging in child-processes
     for _ in workers:
         queue_in.put(None)
 
@@ -1671,7 +1659,7 @@ def load_matches_new(dsn, schema, **kwargs):
         w.start()
 
     """
-    Merging organisers:
+    Merging proteins:
     
     We have N organisers, each with the same chunk keys (protein accessions)
     e.g.:
@@ -1688,13 +1676,13 @@ def load_matches_new(dsn, schema, **kwargs):
     ts = time.time()
     with io.ProteinIterator(proteins_file, "rb") as proteins:
 
-        for key in chunk:
-            # Merge the first organiser
-            _proteins = organisers[0].merge(key)
+        for key in chunks:
+            # Get chunk from the first (merged) organiser
+            _proteins = organisers[0].load(key)
 
-            # Then incorporate subsequent merged organisers
+            # Then incorporate subsequent (merged) organisers
             for o in organisers[1:]:
-                for k, v in o.merge(key).items():
+                for k, v in o.load(key).items():
                     if k in _proteins:
                         _proteins[k] += v
                     else:
@@ -1751,7 +1739,7 @@ def load_matches_new(dsn, schema, **kwargs):
                 chunk.append((protein_acc, prot_dbcode, length, desc_id,
                               left_num, matches))
 
-                if len(chunk) == QUEUE_CHUNK_SIZE:
+                if len(chunk) == PROTEIN_QUEUE_CHUNK_SIZE:
                     queue_in.put(chunk)
                     chunk = []
 
