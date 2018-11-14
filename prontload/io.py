@@ -43,25 +43,39 @@ class Organiser(object):
                     pickle.dump(b["data"], fh)
                 b["data"] = {}
 
-    def merge(self, key):
+    def merge(self):
+        size_before = 0
+        size_after = 0
+
+        for b in self.buckets:
+            size_before += os.path.getsize(b["path"])
+
+            data = {}
+            with open(b["path"], "rb") as fh:
+                while True:
+                    try:
+                        chunk = pickle.load(fh)
+                    except EOFError:
+                        break
+                    else:
+                        for key, value in chunk.items():
+                            if key in data:
+                                data[key] += value
+                            else:
+                                data[key] = value
+
+            with open(b["path"], "wb") as fh:
+                pickle.dump(data, fh)
+
+            size_after += os.path.getsize(b["path"])
+
+        return size_before, size_after
+
+    def load(self, key):
         i = self.keys.index(key)
         b = self.buckets[i]
-
-        data = {}
         with open(b["path"], "rb") as fh:
-            while True:
-                try:
-                    chunk = pickle.load(fh)
-                except EOFError:
-                    break
-                else:
-                    for key, value in chunk.items():
-                        if key in data:
-                            data[key] += value
-                        else:
-                            data[key] = value
-
-        return data
+            return pickle.load(fh)
 
 
 class ProteinIterator(object):
