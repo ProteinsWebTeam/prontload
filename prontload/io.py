@@ -62,3 +62,43 @@ class Organiser(object):
                             data[key] = value
 
         return data
+
+
+class ProteinIterator(object):
+    def __init__(self, filepath, mode="rb"):
+        self.filepath = filepath
+        self.mode = mode
+        self.fh = None
+
+    def add(self, obj):
+        pickle.dump(obj, self.fh)
+
+    def open(self, mode="rb"):
+        self.close()
+        self.fh = open(self.filepath, mode)
+
+    def close(self):
+        if self.fh is not None:
+            self.fh.close()
+            self.fh = None
+
+    def __enter__(self):
+        self.open(self.mode)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __del__(self):
+        self.close()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            obj = pickle.load(self.fh)
+        except EOFError:
+            raise StopIteration
+        else:
+            return obj
