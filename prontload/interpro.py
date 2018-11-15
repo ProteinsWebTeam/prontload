@@ -16,7 +16,6 @@ from .oracledb import Connection
 
 BULK_INSERT_SIZE = 100000
 MATCH_QUEUE_CHUNK_SIZE = 1000000
-PROTEIN_QUEUE_CHUNK_SIZE = 10000
 
 
 def create_synonyms(dsn, src, dst, tables=[]):
@@ -1649,7 +1648,7 @@ def dump_matches(con, schema, chunks, processes, tmpdir=None):
 
 
 def process_proteins(dsn, con, schema, chunks, processes, max_gap, store,
-                     organisers, tmpdir=None):
+                     organisers, tmpdir=None, chunk_size=10000):
     queue_in = Queue(maxsize=processes)
     queue_out = Queue()
 
@@ -1746,7 +1745,7 @@ def process_proteins(dsn, con, schema, chunks, processes, max_gap, store,
             chunk.append((protein_acc, prot_dbcode, length, desc_id,
                           left_num, matches))
 
-            if len(chunk) == PROTEIN_QUEUE_CHUNK_SIZE:
+            if len(chunk) == chunk_size:
                 queue_in.put(chunk)
                 chunk = []
 
@@ -1859,6 +1858,7 @@ def load_matches_new(dsn, schema, **kwargs):
 
     logging.info("making predictions")
 
+    loader.join()
 
 
 def copy_schema(dsn, schema):
