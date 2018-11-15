@@ -1667,7 +1667,6 @@ def process_proteins(dsn, con, schema, chunks, processes, max_gap, proteins,
         Organiser #1 and #2 may have matches for the same proteins,
         so we are going to merge chunk by chunk (A, then D, then G, etc.).
         """
-    logging.info("processing proteins")
     workers = [
         ProteinConsumer(dsn, schema, max_gap, queue_in, queue_out,
                         dir=tmpdir)
