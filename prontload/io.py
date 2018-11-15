@@ -100,12 +100,14 @@ class ProteinStore(object):
             self.fh.close()
             self.fh = None
 
+    def clean(self):
         if self.delete and self.path is not None:
             os.remove(self.path)
             self.path = None
 
     def __del__(self):
         self.close()
+        self.clean()
 
     def __iter__(self):
         self.close()
