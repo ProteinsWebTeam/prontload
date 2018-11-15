@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import bisect
 import hashlib
 import logging
 import math
@@ -10,7 +9,6 @@ import pickle
 import struct
 import time
 from multiprocessing import Process, Queue
-from tempfile import mkstemp
 
 from . import io
 from .oracledb import Connection
