@@ -1697,8 +1697,12 @@ def process_proteins(dsn, con, schema, chunks, processes, max_gap, proteins,
         for protein_acc in sorted(_proteins):
             while True:
                 # Find protein in ProteinStore
-                (acc, length, prot_dbcode,
-                 desc_id, left_num) = next(protein_iterator)
+                try:
+                    (acc, length, prot_dbcode,
+                     desc_id, left_num) = next(protein_iterator)
+                except Exception as e:
+                    logging.error(protein_acc)
+                    raise e
                 if acc == protein_acc:
                     break
 
