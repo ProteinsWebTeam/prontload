@@ -1624,7 +1624,7 @@ def dump_matches(con, schema, chunks, processes, tmpdir=None):
             chunk = []
 
         cnt += 1
-        if not cnt % 10000000:
+        if not cnt % 100000000:
             logging.info("{:>12}".format(cnt))
 
     if chunk:
