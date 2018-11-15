@@ -1650,7 +1650,7 @@ def dump_matches(con, schema, chunks, processes, tmpdir=None):
     return organisers
 
 
-def process_proteins(dsn, con, schema, chunks, processes, max_gap, proteins,
+def process_proteins(dsn, con, schema, chunks, processes, max_gap, store,
                      organisers, tmpdir=None):
     queue_in = Queue(maxsize=processes)
     queue_out = Queue()
@@ -1679,7 +1679,7 @@ def process_proteins(dsn, con, schema, chunks, processes, max_gap, proteins,
     cnt = 0
     chunk = []
     ts = time.time()
-    protein_iterator = iter(proteins)
+    proteins = iter(store)
     for key in chunks:
         # Get chunk from the first (merged) organiser
         _proteins = organisers[0].load(key)
@@ -1698,7 +1698,7 @@ def process_proteins(dsn, con, schema, chunks, processes, max_gap, proteins,
                 # Find protein in ProteinStore
                 try:
                     (acc, length, prot_dbcode,
-                     desc_id, left_num) = next(protein_iterator)
+                     desc_id, left_num) = next(proteins)
                 except Exception as e:
                     logging.error(protein_acc)
                     raise e
@@ -1836,9 +1836,10 @@ def load_matches_new(dsn, schema, **kwargs):
     # )
 
     logging.info("dumping proteins")
-    proteins = io.ProteinStore(dir=tmpdir, mode="wb")
+    store = io.ProteinStore(dir=tmpdir, mode="wb")
     con = Connection(dsn)
-    chunks = dump_proteins(con, schema, proteins)
+    chunks = dump_proteins(con, schema, store)
+    logging.info("{}: {}".format(store.path, os.path.getsize(store.path)))
 
     # Creating MATCH table (in a separate process)
     loader = Process(target=insert_matches, args=(dsn, schema))
@@ -1853,10 +1854,10 @@ def load_matches_new(dsn, schema, **kwargs):
 
     logging.info("processing proteins")
     res = process_proteins(dsn, con, schema, chunks, processes, max_gap,
-                           proteins, organisers, tmpdir)
+                           store, organisers, tmpdir)
     signatures, comparisons, name_organisers, taxon_organisers = res
 
-    proteins.close()  # close/delete protein store (don't need any more)
+    store.close()  # close/delete protein store (don't need any more)
 
     logging.info("making predictions")
 
