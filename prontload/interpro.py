@@ -1588,6 +1588,10 @@ def dump_matches(con, schema, chunks, processes, tmpdir=None):
 
     chunk = []
     cnt = 0
+    """
+    JOIN ETAXI and PROTEIN_DESC to be sure to dump *only* matches
+        on proteins dumped in dump_proteins()
+    """
     for row in con.get(
             """
             SELECT
@@ -1598,12 +1602,16 @@ def dump_matches(con, schema, chunks, processes, tmpdir=None):
               MA.POS_FROM,
               MA.POS_TO
             FROM INTERPRO.MATCH MA
-              INNER JOIN INTERPRO.METHOD ME
+              INNER JOIN {0}.METHOD ME
                 ON MA.METHOD_AC = ME.METHOD_AC
             WHERE MA.PROTEIN_AC IN (
-              SELECT PROTEIN_AC
-              FROM INTERPRO.PROTEIN
-              WHERE FRAGMENT = 'N'
+              SELECT P.PROTEIN_AC
+              FROM {0}.PROTEIN P
+              INNER JOIN {0}.ETAXI E
+                ON P.TAX_ID = E.TAX_ID
+              INNER JOIN {0}.PROTEIN_DESC D
+                ON P.PROTEIN_AC = D.PROTEIN_AC   
+              WHERE P.FRAGMENT = 'N'
             )
             """.format(schema)
     ):
