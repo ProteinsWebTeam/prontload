@@ -24,6 +24,11 @@ class Organiser(object):
             }
             for key in self.keys
         ]
+        self.index = 0
+
+    @property
+    def size(self):
+        return len(self.buckets)
 
     def add(self, key, value):
         i = bisect.bisect_right(self.keys, key)
@@ -71,23 +76,36 @@ class Organiser(object):
 
         return size_before, size_after
 
-    def load(self, key):
-        i = self.keys.index(key)
-        b = self.buckets[i]
-        with open(b["path"], "rb") as fh:
-            return pickle.load(fh)
+    def remove(self):
+        for b in self.buckets:
+            os.remove(b["path"])
+        os.rmdir(self.path)
+
+    def __iter__(self):
+        self.index = 0
+        return self
+
+    def __next__(self):
+        try:
+            b = self.buckets[self.index]
+        except IndexError:
+            raise StopIteration
+        else:
+            self.index += 1
+            with open(b["path"], "rb") as fh:
+                return pickle.load(fh)
 
 
 class ProteinStore(object):
     def __init__(self, path=None, dir=None, mode="rb"):
         if path:
             self.path = path
-            self.delete = False
+            self.temporary = False
         else:
             fd, self.path = mkstemp(dir=dir)
             os.close(fd)
             os.remove(self.path)
-            self.delete = True
+            self.temporary = True
 
         self.fh = open(self.path, mode)
 
@@ -100,14 +118,21 @@ class ProteinStore(object):
             self.fh.close()
             self.fh = None
 
-    def clean(self):
-        if self.delete and self.path is not None:
+    def remove(self):
+        if self.temporary and self.path is not None:
             os.remove(self.path)
             self.path = None
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        self.remove()
+
     def __del__(self):
         self.close()
-        self.clean()
+        self.remove()
 
     def __iter__(self):
         self.close()
