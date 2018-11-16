@@ -71,17 +71,14 @@ def load_signatures(dsn, schema):
             DBCODE CHAR(1) NOT NULL,
             CANDIDATE CHAR(1) NOT NULL,
             DESCRIPTION VARCHAR2(220),
-            SIG_TYPE CHAR(1),
-            PROTEIN_COUNT NUMBER(8) DEFAULT 0 NOT NULL
+            SIG_TYPE CHAR(1)
         ) NOLOGGING
         """.format(schema)
     )
 
     con.execute(
         """
-        INSERT /*+APPEND*/ INTO {}.METHOD (
-            METHOD_AC, NAME, DBCODE, CANDIDATE, DESCRIPTION, SIG_TYPE
-        )
+        INSERT /*+APPEND*/ INTO {}.METHOD
         SELECT METHOD_AC, NAME, DBCODE, CANDIDATE, DESCRIPTION, SIG_TYPE
         FROM INTERPRO.METHOD
         """.format(schema)
@@ -427,6 +424,20 @@ class ProteinConsumer(Process):
             organiser_names.dump()
             organiser_taxa.dump()
 
+        size_before, size_after = organiser_names.merge()
+        logging.info("names: {}: {} bytes (before); {} bytes (after)".format(
+            os.path.basename(organiser_names.path),
+            size_before,
+            size_after
+        ))
+
+        size_before, size_after = organiser_taxa.merge()
+        logging.info("taxa: {}: {} bytes (before); {} bytes (after)".format(
+            os.path.basename(organiser_taxa.path),
+            size_before,
+            size_after
+        ))
+
         self.queue_out.put((
             signatures,
             comparisons,
@@ -541,575 +552,6 @@ class ProteinConsumer(Process):
         ).hexdigest()
 
 
-class Aggregator(Process):
-    def __init__(self, dsn, schema, queue, **kwargs):
-        super().__init__()
-        self.dsn = dsn
-        self.schema = schema
-        self.queue = queue
-
-    def run(self):
-        signatures = {}
-        comparisons = {}
-        buckets = []
-        while True:
-            task = self.queue.get()
-            if task is None:
-                break
-
-            _signatures, _comparisons, _buckets = task
-
-            # Merge signatures and comparisons
-            for acc in _signatures:
-                if acc in signatures:
-                    for k, v in _signatures[acc].items():
-                        signatures[acc][k] += v
-                else:
-                    signatures[acc] = _signatures[acc]
-                    continue
-
-            for acc1 in _comparisons:
-                if acc1 in comparisons:
-                    d = comparisons[acc1]
-                else:
-                    comparisons[acc1] = _comparisons[acc1]
-                    continue
-
-                for acc2 in _comparisons[acc1]:
-                    if acc2 in d:
-                        for k, v in _comparisons[acc1][acc2].items():
-                            d[acc2][k] += v
-                    else:
-                        d[acc2] = _comparisons[acc1][acc2]
-
-            buckets.append(_buckets)
-
-        logging.info("making predictions")
-
-        con = Connection(self.dsn)
-        candidates = set()
-        non_prosite_candidates = set()
-        query = """
-            SELECT METHOD_AC, DBCODE
-            FROM {}.METHOD
-            WHERE CANDIDATE = 'Y'
-        """.format(self.schema)
-        for accession, dbcode in con.get(query):
-            candidates.add(accession)
-            if dbcode != 'P':
-                non_prosite_candidates.add(accession)
-
-        # Determine relations/adjacent
-        relations = {}
-        adjacents = {}
-        for acc_1 in comparisons:
-            s_1 = signatures[acc_1]
-
-            for acc_2 in comparisons[acc_1]:
-                s_2 = signatures[acc_2]
-                c = comparisons[acc_1][acc_2]
-
-                if (c['prot_over'] >= s_1['proteins'] * 0.4
-                        or c['prot_over'] >= s_2['proteins'] * 0.4):
-                    # is a relation
-                    if acc_1 in relations:
-                        relations[acc_1].append(acc_2)
-                    else:
-                        relations[acc_1] = [acc_2]
-                elif c['prot'] >= s_1['proteins'] * 0.1:
-                    # is adjacent
-                    if acc_1 in adjacents:
-                        adjacents[acc_1].append(acc_2)
-                    else:
-                        adjacents[acc_1] = [acc_2]
-
-                if acc_1 != acc_2:
-                    if (c['prot_over'] >= s_1['proteins'] * 0.4
-                            or c['prot_over'] >= s_2['proteins'] * 0.4):
-                        # is a relation
-                        if acc_2 in relations:
-                            relations[acc_2].append(acc_1)
-                        else:
-                            relations[acc_2] = [acc_1]
-                    elif c['prot'] >= s_2['proteins'] * 0.1:
-                        # is adjacent
-                        if acc_2 in adjacents:
-                            adjacents[acc_2].append(acc_1)
-                        else:
-                            adjacents[acc_2] = [acc_1]
-
-        """
-        Determine extra/adjacent relation:
-
-        Let A, and B be two signatures in a relationship.
-        extra relation:
-            num of signatures in a relationship with A but not with B
-        adjacent relation:
-            num of signatures in a relationship with A and adjacent to B
-        """
-        extra_relations = {}
-        adj_relations = {}
-        for acc_1 in relations:
-            # signatures in a relationship with acc_1
-            # (that are candidate and not from PROSITE pattern)
-            rel_1 = set(relations[acc_1]) & non_prosite_candidates
-
-            for acc_2 in relations[acc_1]:
-                # signatures in a relationship with acc_2
-                rel_2 = set(relations.get(acc_2, []))
-
-                # signature adjacent to acc_2
-                adj_2 = set(adjacents.get(acc_2, []))
-
-                extra = rel_1 - rel_2
-                if acc_1 in extra_relations:
-                    extra_relations[acc_1][acc_2] = len(extra)
-                else:
-                    extra_relations[acc_1] = {acc_2: len(extra)}
-
-                adj = rel_1 & adj_2
-                if acc_1 in adj_relations:
-                    adj_relations[acc_1][acc_2] = len(adj)
-                else:
-                    adj_relations[acc_1] = {acc_2: len(adj)}
-
-        # Make predictions
-        predictions = []
-        for acc_1 in comparisons:
-            s_1 = signatures[acc_1]
-
-            if acc_1 not in candidates:
-                continue
-
-            for acc_2 in comparisons[acc_1]:
-                if acc_1 == acc_2 or acc_2 not in candidates:
-                    continue
-
-                c = comparisons[acc_1][acc_2]
-                s_2 = signatures[acc_2]
-
-                if (c['prot_over'] >= s_1['proteins'] * 0.4
-                        or c['prot_over'] >= s_2['proteins'] * 0.4):
-                    extra_1 = extra_relations.get(acc_1, {}).get(acc_2, 0)
-                    extra_2 = extra_relations.get(acc_2, {}).get(acc_1, 0)
-
-                    """
-                    Inverting acc2 and acc1
-                    to have the same predictions than HH
-                    """
-                    # TODO: is this really OK?
-                    adj_1 = adj_relations.get(acc_2, {}).get(acc_1, 0)
-                    adj_2 = adj_relations.get(acc_1, {}).get(acc_2, 0)
-
-                    if c['over']:
-                        """
-                        frac_1 and frac_2 are the sum of ratios
-                        (overlap / match length).
-                        if close to 1:
-                            the match was mostly contained
-                            by the overlap in most cases
-
-                                A   -------------
-                                B       ---
-
-                            frac(B) = overlap(A,B) / length(B)
-                                    = 1
-                                    indeed B is 100% within the overlap
-
-                        len_1 and len_2 are the average of sums.
-                        If len(B) is close to 1:
-                            B was mostly within the overlap in most cases
-                            so B < A (because B ~ overlap and A >= overlap)
-                            so B CONTAINED_BY A
-                        """
-                        len_1 = c['frac_1'] / c['over']
-                        len_2 = c['frac_2'] / c['over']
-                    else:
-                        len_1 = len_2 = 0
-
-                    """
-                    Parent/Child relationships:
-                    The protein/matches made by the child entry
-                        must be a complete (>75%) subset of the parent entry
-
-                    if over(A) > 0.75, it means that A overlaps with B
-                        in at least 75% of its proteins or matches:
-                            A is a CHILD_OF B
-                    """
-                    over_1 = min(
-                        c['over'] / s_1['matches'],
-                        c['prot_over'] / s_1['proteins']
-                    )
-                    over_2 = min(
-                        c['over'] / s_2['matches'],
-                        c['prot_over'] / s_2['proteins']
-                    )
-                    if len_1 >= 0.5 and len_2 >= 0.5:
-                        if (over_1 > 0.75 and over_2 >= 0.75 and
-                                not extra_1 and not extra_2):
-                            prediction = 'ADD_TO'
-                        elif over_1 > 0.75 and not extra_1 and not adj_1:
-                            prediction = 'CHILD_OF'
-                        elif over_2 > 0.75 and not extra_2 and not adj_2:
-                            prediction = 'PARENT_OF'  # acc2 child of acc1
-                        elif len_1 >= 0.9:
-                            if len_2 >= 0.9:
-                                prediction = 'C/C'
-                            else:
-                                prediction = 'CONTAINED_BY'
-                        elif len_2 >= 0.9:
-                            prediction = 'CONTAINER_OF'
-                        else:
-                            prediction = 'OVERLAPS'
-                    elif len_1 >= 0.9:
-                        prediction = 'CONTAINED_BY'
-                    elif len_2 >= 0.9:
-                        prediction = 'CONTAINER_OF'
-                    else:
-                        prediction = 'OVERLAPS'
-
-                    predictions.append((acc_1, acc_2, prediction))
-
-                    # switch (acc_1, acc_2) -> (acc_2, acc_1)
-                    if prediction == 'CHILD_OF':
-                        prediction = 'PARENT_OF'
-                    elif prediction == 'PARENT_OF':
-                        prediction = 'CHILD_OF'
-                    elif prediction == 'CONTAINED_BY':
-                        prediction = 'CONTAINER_OF'
-                    elif prediction == 'CONTAINER_OF':
-                        prediction = 'CONTAINED_BY'
-                    predictions.append((acc_2, acc_1, prediction))
-
-        # Populating METHOD_MATCH
-        con.drop_table(self.schema, "METHOD_MATCH")
-        con.execute(
-            """
-            CREATE TABLE {}.METHOD_MATCH
-            (
-                METHOD_AC VARCHAR2(25) NOT NULL,
-                N_MATCHES NUMBER NOT NULL,
-                N_PROT NUMBER NOT NULL
-            ) NOLOGGING
-            """.format(self.schema)
-        )
-
-        signatures = [
-            (acc, s['matches'], s['proteins'])
-            for acc, s in signatures.items()
-        ]
-        for i in range(0, len(signatures), BULK_INSERT_SIZE):
-            con.executemany(
-                """
-                INSERT /*+APPEND*/ INTO {}.METHOD_MATCH (
-                    METHOD_AC, N_MATCHES, N_PROT
-                )
-                VALUES (:1, :2, :3)
-                """.format(self.schema),
-                signatures[i:i+BULK_INSERT_SIZE]
-            )
-            con.commit()
-
-        # Optimizing METHOD_MATCH
-        con.execute(
-            """
-            ALTER TABLE {}.METHOD_MATCH
-            ADD CONSTRAINT PK_METHOD_MATCH PRIMARY KEY (METHOD_AC)
-            """.format(self.schema)
-        )
-        con.optimize_table(self.schema, "METHOD_MATCH", cascade=True)
-        con.grant("SELECT", self.schema, "METHOD_MATCH", "INTERPRO_SELECT")
-
-        # Creating METHOD_OVERLAP
-        con.drop_table(self.schema, "METHOD_OVERLAP")
-        con.execute(
-            """
-            CREATE TABLE {}.METHOD_OVERLAP
-            (
-                METHOD_AC1 VARCHAR2(25) NOT NULL,
-                METHOD_AC2 VARCHAR2(25) NOT NULL,
-                N_PROT NUMBER NOT NULL,
-                N_OVER NUMBER NOT NULL,
-                N_PROT_OVER NUMBER NOT NULL,
-                AVG_OVER NUMBER NOT NULL,
-                AVG_FRAC1 NUMBER NOT NULL,
-                AVG_FRAC2 NUMBER NOT NULL
-            ) NOLOGGING
-            """.format(self.schema)
-        )
-
-        # Computing data for METHOD_OVERLAP
-        overlaps = []
-        for acc_1 in comparisons:
-            for acc_2 in comparisons[acc_1]:
-                c = comparisons[acc_1][acc_2]
-
-                if c['over']:
-                    avg_frac1 = 100 * c['frac_1'] / c['over']
-                    avg_frac2 = 100 * c['frac_2'] / c['over']
-                    avg_over = c['length'] / c['over']
-                else:
-                    avg_frac1 = avg_frac2 = avg_over = 0
-
-                """
-                Cast to float as cx_Oracle 6.1 throws TypeError
-                    (expecting integer)
-                when the value of the 1st record is an integer
-                    (e.g. AVG_OVER=0)
-                and the value for the second is not (e.g. AVG_OVER=25.6)
-                """
-                overlaps.append((
-                    acc_1, acc_2, c['prot'], c['over'], c['prot_over'],
-                    float(avg_over), float(avg_frac1), float(avg_frac2)
-                ))
-
-                if acc_1 != acc_2:
-                    overlaps.append((
-                        acc_2, acc_1, c['prot'], c['over'], c['prot_over'],
-                        float(avg_over), float(avg_frac2), float(avg_frac1)
-                    ))
-
-        # Populating METHOD_OVERLAP
-        for i in range(0, len(overlaps), BULK_INSERT_SIZE):
-            con.executemany(
-                """
-                INSERT /*+APPEND*/ INTO {}.METHOD_OVERLAP (
-                    METHOD_AC1, METHOD_AC2, N_PROT, N_OVER,
-                    N_PROT_OVER, AVG_OVER, AVG_FRAC1, AVG_FRAC2
-                )
-                VALUES (:1, :2, :3, :4, :5, :6, :7, :8)
-                """.format(self.schema),
-                overlaps[i:i+BULK_INSERT_SIZE]
-            )
-            con.commit()
-
-        # Optimizing METHOD_OVERLAP
-        con.execute(
-            """
-            ALTER TABLE {}.METHOD_OVERLAP
-            ADD CONSTRAINT PK_METHOD_OVERLAP
-            PRIMARY KEY (METHOD_AC1, METHOD_AC2)
-            """.format(self.schema)
-        )
-        con.optimize_table(self.schema, "METHOD_OVERLAP", cascade=True)
-        con.grant("SELECT", self.schema, "METHOD_OVERLAP", "INTERPRO_SELECT")
-
-        # Creating METHOD_PREDICTION
-        con.drop_table(self.schema, "METHOD_PREDICTION")
-        con.execute(
-            """
-            CREATE TABLE {}.METHOD_PREDICTION
-            (
-                METHOD_AC1 VARCHAR2(25) NOT NULL,
-                METHOD_AC2 VARCHAR2(25) NOT NULL,
-                RELATION VARCHAR2(15) NOT NULL
-            ) NOLOGGING
-            """.format(self.schema)
-        )
-
-        # Populating METHOD_PREDICTION
-        for i in range(0, len(predictions), BULK_INSERT_SIZE):
-            con.executemany(
-                """
-                INSERT /*+APPEND*/
-                INTO {}.METHOD_PREDICTION (METHOD_AC1, METHOD_AC2, RELATION)
-                VALUES (:1, :2, :3)
-                """.format(self.schema),
-                predictions[i:i+BULK_INSERT_SIZE]
-            )
-            con.commit()
-
-        # Optimizing METHOD_PREDICTION
-        con.execute(
-            """
-            ALTER TABLE {}.METHOD_PREDICTION
-            ADD CONSTRAINT PK_METHOD_PREDICTION
-            PRIMARY KEY (METHOD_AC1, METHOD_AC2)
-            """.format(self.schema)
-        )
-        con.optimize_table(self.schema, "METHOD_PREDICTION", cascade=True)
-        con.grant("SELECT", self.schema,
-                  "METHOD_PREDICTION", "INTERPRO_SELECT")
-
-        # Optimizing METHOD2PROTEIN
-        logging.info("optimizing METHOD2PROTEIN")
-        con.execute(
-            """
-            ALTER TABLE {}.METHOD2PROTEIN
-            ADD CONSTRAINT PK_METHOD2PROTEIN
-            PRIMARY KEY (METHOD_AC, PROTEIN_AC)
-            """.format(self.schema)
-        )
-        con.execute(
-            """
-            CREATE INDEX I_METHOD2PROTEIN$M
-            ON {}.METHOD2PROTEIN (METHOD_AC)
-            NOLOGGING
-            """.format(self.schema)
-        )
-        con.execute(
-            """
-            CREATE INDEX I_METHOD2PROTEIN$P
-            ON {}.METHOD2PROTEIN (PROTEIN_AC)
-            NOLOGGING
-            """.format(self.schema)
-        )
-        con.execute(
-            """
-            CREATE INDEX I_METHOD2PROTEIN$LN
-            ON {}.METHOD2PROTEIN (LEFT_NUMBER)
-            NOLOGGING
-            """.format(self.schema)
-        )
-        con.execute(
-            """
-            CREATE INDEX I_METHOD2PROTEIN$M$DB
-            ON {}.METHOD2PROTEIN (METHOD_AC, DBCODE)
-            NOLOGGING
-            """.format(self.schema)
-        )
-
-        con.optimize_table(self.schema, "METHOD2PROTEIN", cascade=True)
-        con.grant("SELECT", self.schema, "METHOD2PROTEIN", "INTERPRO_SELECT")
-
-        # Insert signature counts
-        logging.info("creating METHOD_DESC and METHOD_TAXA")
-        con.drop_table(self.schema, "METHOD_DESC")
-        con.execute(
-            """
-            CREATE TABLE {}.METHOD_DESC
-            (
-                METHOD_AC VARCHAR2(25) NOT NULL,
-                DESC_ID NUMBER(10) NOT NULL,
-                REVIEWED_COUNT NUMBER(10) NOT NULL,
-                UNREVIEWED_COUNT NUMBER(10) NOT NULL
-            ) NOLOGGING
-            """.format(self.schema)
-        )
-        con.drop_table(self.schema, "METHOD_TAXA")
-        con.execute(
-            """
-            CREATE TABLE {}.METHOD_TAXA
-            (
-                METHOD_AC VARCHAR2(25) NOT NULL,
-                RANK VARCHAR2(50) NOT NULL,
-                TAX_ID NUMBER(10) NOT NULL,
-                PROTEIN_COUNT NUMBER(10) NOT NULL
-            ) NOLOGGING
-            """.format(self.schema)
-        )
-
-        # Assume that all consumers had the same number of buckets
-        n = len(buckets[0])
-        total_size = 0
-        for i in range(n):
-            data1 = []
-            data2 = []
-            signatures = {}
-            for b in buckets:
-                total_size += os.path.getsize(b[i])
-                self.load_bucket(b[i], signatures)
-                os.remove(b[i])
-
-            for acc in signatures:
-                s = signatures[acc]
-
-                data1 += [
-                    (acc, rank, tax_id, count)
-                    for rank, taxa in s["ranks"].items()
-                    for tax_id, count in taxa.items()
-                ]
-
-                data2 += [
-                    (acc, desc_id, counts[0], counts[1])
-                    for desc_id, counts in s["names"].items()
-                ]
-
-            for i in range(0, len(data1), BULK_INSERT_SIZE):
-                con.executemany(
-                    """
-                    INSERT /*+APPEND*/ INTO {}.METHOD_TAXA
-                    VALUES (:1, :2, :3, :4)
-                    """.format(self.schema),
-                    data1[i:i+BULK_INSERT_SIZE]
-                )
-                con.commit()
-
-            for i in range(0, len(data2), BULK_INSERT_SIZE):
-                con.executemany(
-                    """
-                    INSERT /*+APPEND*/ INTO {}.METHOD_DESC
-                    VALUES (:1, :2, :3, :4)
-                    """.format(self.schema),
-                    data2[i:i+BULK_INSERT_SIZE]
-                )
-                con.commit()
-
-        # Optimizing
-        logging.info("optimizing METHOD_DESC and METHOD_TAXA")
-        con.execute(
-            """
-            ALTER TABLE {}.METHOD_DESC
-            ADD CONSTRAINT PK_METHOD_DESC
-            PRIMARY KEY (METHOD_AC, DESC_ID)
-            NOLOGGING
-            """.format(self.schema)
-        )
-        con.optimize_table(self.schema, "METHOD_DESC", cascade=True)
-        con.grant("SELECT", self.schema, "METHOD_DESC", "INTERPRO_SELECT")
-
-        con.execute(
-            """
-            ALTER TABLE {}.METHOD_TAXA
-            ADD CONSTRAINT PK_METHOD_TAXA
-            PRIMARY KEY (METHOD_AC, RANK, TAX_ID)
-            NOLOGGING
-            """.format(self.schema)
-        )
-        con.optimize_table(self.schema, "METHOD_TAXA", cascade=True)
-        con.grant("SELECT", self.schema, "METHOD_TAXA", "INTERPRO_SELECT")
-
-        logging.info("temporary files: {} bytes".format(total_size))
-
-    @staticmethod
-    def load_bucket(filepath, signatures):
-        with open(filepath, "rb") as fh:
-            while True:
-                try:
-                    n_bytes, = struct.unpack("<I", fh.read(4))
-                except struct.error:
-                    break
-                else:
-                    _signatures = pickle.loads(fh.read(n_bytes))
-
-                    for acc in _signatures:
-                        _s = _signatures[acc]
-                        if acc in signatures:
-                            s = signatures[acc]
-                        else:
-                            signatures[acc] = _s
-                            continue
-
-                        for rank, taxa in _s["ranks"].items():
-                            if rank in s["ranks"]:
-                                r = s["ranks"][rank]
-                            else:
-                                r = s["ranks"][rank] = {}
-
-                            for tax_id, count in taxa.items():
-                                if tax_id in r:
-                                    r[tax_id] += count
-                                else:
-                                    r[tax_id] = count
-
-                        for desc_id, counts in _s["names"].items():
-                            if desc_id in s["names"]:
-                                s["names"][desc_id][0] += counts[0]
-                                s["names"][desc_id][1] += counts[1]
-                            else:
-                                s["names"][desc_id] = counts
-
-
 def iter_matches(con, schema, order=True):
     query = """
             SELECT
@@ -1142,314 +584,6 @@ def iter_matches(con, schema, order=True):
 
     for row in con.get(query):
         yield row
-
-
-def load_matches(dsn, schema, **kwargs):
-    n_buckets = kwargs.get("buckets", 100)
-    chunk_size = kwargs.get("chunk_size", 100000)
-    processes = kwargs.get("processes", 3)
-    limit = kwargs.get("limit", 0)
-    max_gap = kwargs.get("max_gap", 20)
-    source = kwargs.get("source")
-    tmpdir = kwargs.get("tmpdir")
-
-    n_consumers = max(1, processes-2)
-    q1 = Queue(n_consumers)
-    q2 = Queue()
-
-    consumers = [
-        ProteinConsumer(dsn, schema, max_gap, q1, q2,
-                        buckets=n_buckets, chunk_size=chunk_size, tmpdir=tmpdir)
-        for _ in range(n_consumers)
-    ]
-    for c in consumers:
-        c.start()
-
-    aggreator = Aggregator(dsn, schema, q2, chunk_size=chunk_size)
-    aggreator.start()
-
-    con = Connection(dsn)
-    con.drop_table(schema, "MATCH")
-    con.execute(
-        """
-        CREATE TABLE {}.MATCH
-        (
-            PROTEIN_AC VARCHAR2(15) NOT NULL,
-            METHOD_AC VARCHAR2(25) NOT NULL,
-            MODEL_AC VARCHAR2(25) NOT NULL,
-            POS_FROM NUMBER(5) NOT NULL,
-            POS_TO NUMBER(5) NOT NULL,
-            DBCODE CHAR(1) NOT NULL,
-            FRAGMENTS VARCHAR2(200) DEFAULT NULL
-        ) NOLOGGING
-        """.format(schema)
-    )
-
-    con.drop_table(schema, "METHOD2PROTEIN")
-    con.execute(
-        """
-        CREATE TABLE {}.METHOD2PROTEIN
-        (
-            METHOD_AC VARCHAR2(25) NOT NULL,
-            PROTEIN_AC VARCHAR2(15) NOT NULL,
-            DBCODE CHAR(1) NOT NULL,
-            MD5 VARCHAR(32) NOT NULL,
-            LEN NUMBER(5) NOT NULL,
-            LEFT_NUMBER NUMBER NOT NULL,
-            DESC_ID NUMBER(10) NOT NULL
-        ) NOLOGGING
-        """.format(schema)
-    )
-
-    if not source:
-        source = iter_matches(con, schema)
-
-    ts = time.time()
-    # matches to be inserted in the MATCH table
-    matches = []
-    # matches to be used for protein match structure and predictions
-    matches_agg = []
-    # methods having matches to merge
-    methods = {}
-    # previous protein accession
-    protein = None
-    # protein DB code (S: SwissProt, T: TrEMBL)
-    prot_dbcode = None
-    # Sequence length
-    length = None
-    # Description ID
-    desc_id = None
-    # Taxon left number
-    left_num = None
-    n_proteins = 0
-
-    method_proteins = {}
-    protein_methods = set()
-
-    chunk = []
-    enqueue_time = 0
-    for row in source:
-        protein_acc = row[0]
-
-        if protein_acc != protein:
-            if protein:
-                for method_acc in methods:
-                    # Merge matches
-                    min_pos = None
-                    max_pos = None
-
-                    for start, end in methods[method_acc]:
-                        if min_pos is None or start < min_pos:
-                            min_pos = start
-                        if max_pos is None or end > max_pos:
-                            max_pos = end
-
-                    matches_agg.append((method_acc, min_pos, max_pos))
-
-                if matches_agg:
-                    chunk.append((
-                        protein, prot_dbcode, length,
-                        desc_id, left_num, matches_agg
-                    ))
-
-                    if len(chunk) == chunk_size:
-                        t = time.time()
-                        q1.put(chunk)
-                        enqueue_time += time.time() - t
-                        chunk = []
-
-                matches_agg = []
-                methods = {}
-
-                for k in protein_methods:
-                    if k in method_proteins:
-                        method_proteins[k] += 1
-                    else:
-                        method_proteins[k] = 1
-
-                protein_methods = set()
-                n_proteins += 1
-                if n_proteins == limit:
-                    break
-                elif not n_proteins % 1000000:
-                    logging.info("{:>12} ({:.0f} proteins/sec)".format(
-                        n_proteins,
-                        n_proteins // (time.time() - ts)
-                    ))
-            else:
-                logging.info(
-                    "starting after {:.0f} seconds".format(time.time()-ts)
-                )
-                ts = time.time()
-
-            protein = protein_acc
-
-        method_acc = row[1]
-        model_acc = row[1] if row[2] is None else row[2]
-        start = math.floor(row[3])
-        end = math.floor(row[4])
-        fragments = row[5]
-        method_dbcode = row[6]
-        method_type = row[7]
-        length = math.floor(row[8])
-        is_fragment = row[9] == 'Y'
-        prot_dbcode = row[10]
-        desc_id = row[11]
-        left_num = row[12]
-
-        protein_methods.add(method_acc)
-        matches.append((
-            protein, method_acc, model_acc, start, end,
-            method_dbcode, fragments
-        ))
-        if len(matches) == chunk_size:
-            con.executemany(
-                """
-                INSERT /*+APPEND*/ INTO {}.MATCH (
-                    PROTEIN_AC, METHOD_AC, MODEL_AC,
-                    POS_FROM, POS_TO, DBCODE, FRAGMENTS
-                )
-                VALUES (:1, :2, :3, :4, :5, :6, :7)
-                """.format(schema),
-                matches
-            )
-            con.commit()
-            matches = []
-
-        """
-        PANTHER & PRINTS:
-            Merge protein matches.
-            If the signature is a family*, use the entire protein.
-
-            * all PANTHER signatures, almost all PRINTS signatures
-        """
-        if is_fragment:
-            continue
-        elif method_dbcode not in ('F', 'V'):
-            matches_agg.append((method_acc, start, end))
-        elif method_acc not in methods:
-            if method_type == 'F':
-                # Families: use the entire protein sequence
-                methods[method_acc] = [(1, length)]
-            else:
-                methods[method_acc] = [(start, end)]
-        elif method_type != 'F':
-            # Since families use the entire protein, skip their matches
-            methods[method_acc].append((start, end))
-
-    # Flush last protein
-    for method_acc in methods:
-        # Merge matches
-        min_pos = None
-        max_pos = None
-
-        for start, end in methods[method_acc]:
-            if min_pos is None or start < min_pos:
-                min_pos = start
-            if max_pos is None or end > max_pos:
-                max_pos = end
-
-        matches_agg.append((method_acc, min_pos, max_pos))
-
-    for k in protein_methods:
-        if k in method_proteins:
-            method_proteins[k] += 1
-        else:
-            method_proteins[k] = 1
-
-    if matches_agg:
-        chunk.append((
-            protein, prot_dbcode, length,
-            desc_id, left_num, matches_agg
-        ))
-
-    if chunk:
-        t = time.time()
-        q1.put(chunk)
-        enqueue_time += time.time() - t
-        chunk = []
-
-    if matches:
-        con.executemany(
-            """
-            INSERT /*+APPEND*/ INTO {}.MATCH (
-                PROTEIN_AC, METHOD_AC, MODEL_AC,
-                POS_FROM, POS_TO, DBCODE, FRAGMENTS
-            )
-            VALUES (:1, :2, :3, :4, :5, :6, :7)
-            """.format(schema),
-            matches
-        )
-        con.commit()
-        matches = []
-
-    logging.info("{:>12} ({:.0f} proteins/sec)".format(
-        n_proteins,
-        n_proteins // (time.time() - ts)
-    ))
-    logging.info("enqueue time: {:>10.0f} seconds".format(enqueue_time))
-
-    for _ in consumers:
-        q1.put(None)
-
-    if not limit:
-        # Add MobiDB-lite matches
-        con.execute(
-            """
-            INSERT /*+APPEND*/ INTO {}.MATCH (
-                PROTEIN_AC, METHOD_AC, MODEL_AC,
-                POS_FROM, POS_TO, DBCODE, FRAGMENTS
-            )
-            SELECT
-              PROTEIN_AC,
-              METHOD_AC,
-              METHOD_AC,
-              POS_FROM,
-              POS_TO,
-              DBCODE,
-              NULL
-            FROM INTERPRO.FEATURE_MATCH
-            WHERE DBCODE = 'g'
-            """.format(schema)
-        )
-        con.commit()
-
-    for c in consumers:
-        c.join()
-    q2.put(None)
-
-    # Index table
-    logging.info("optimizing MATCH")
-    con.execute(
-        """
-        CREATE INDEX I_MATCH$PROTEIN
-        ON {}.MATCH (PROTEIN_AC) NOLOGGING
-        """.format(schema)
-    )
-    con.execute(
-        """
-        CREATE INDEX I_MATCH$DBCODE
-        ON {}.MATCH (DBCODE) NOLOGGING
-        """.format(schema)
-    )
-    con.optimize_table(schema, "MATCH", cascade=True)
-    con.grant("SELECT", schema, "MATCH", "INTERPRO_SELECT")
-    logging.info("MATCH ready")
-
-    logging.info("updating signatures")
-    for method_acc, n_proteins in method_proteins.items():
-        con.execute(
-            """
-            UPDATE {}.METHOD
-            SET PROTEIN_COUNT = :1
-            WHERE METHOD_AC = :2
-            """.format(schema),
-            n_proteins, method_acc
-        )
-    con.commit()
-    logging.info("{} signatures updated".format(len(method_proteins)))
-
-    aggreator.join()
 
 
 def insert_matches(dsn, schema):
@@ -1661,17 +795,17 @@ def process_proteins(dsn, con, schema, chunks, processes, max_gap, store,
     queue_out = Queue()
 
     """
-        Merging proteins:
+    Merging proteins:
 
-        We have N organisers, each with the same chunk keys (protein accessions)
-        e.g.:
-            Organiser #1    A   D   G   J ...
-            Organiser #2    A   D   G   J ...
-            ...
+    We have N organisers, each with the same chunk keys (protein accessions)
+    e.g.:
+        Organiser #1    A   D   G   J ...
+        Organiser #2    A   D   G   J ...
+        ...
 
-        Organiser #1 and #2 may have matches for the same proteins,
-        so we are going to merge chunk by chunk (A, then D, then G, etc.).
-        """
+    Organiser #1 and #2 may have matches for the same proteins,
+    so we are going to merge chunk by chunk (A, then D, then G, etc.).
+    """
     workers = [
         ProteinConsumer(dsn, schema, max_gap, queue_in, queue_out,
                         dir=tmpdir)
@@ -1681,38 +815,53 @@ def process_proteins(dsn, con, schema, chunks, processes, max_gap, store,
     for w in workers:
         w.start()
 
+    con.drop_table(schema, "METHOD2PROTEIN")
+    con.execute(
+        """
+        CREATE TABLE {}.METHOD2PROTEIN
+        (
+            METHOD_AC VARCHAR2(25) NOT NULL,
+            PROTEIN_AC VARCHAR2(15) NOT NULL,
+            DBCODE CHAR(1) NOT NULL,
+            MD5 VARCHAR(32) NOT NULL,
+            LEN NUMBER(5) NOT NULL,
+            LEFT_NUMBER NUMBER NOT NULL,
+            DESC_ID NUMBER(10) NOT NULL
+        ) NOLOGGING
+        """.format(schema)
+    )
+
     cnt = 0
     chunk = []
     ts = time.time()
-    proteins = iter(store)
-    for key in chunks:
+
+    # Prepare store to be iterated
+    iter(store)
+    for _ in chunks:
         # Get chunk from the first (merged) organiser
-        _proteins = organisers[0].load(key)
+        proteins = next(organisers[0])
 
         # Then incorporate subsequent (merged) organisers
-        for o in organisers[1:]:
-            for k, v in o.load(key).items():
-                if k in _proteins:
-                    _proteins[k] += v
+        for organiser in organisers[1:]:
+            for k, v in next(organiser).items():
+                if k in proteins:
+                    proteins[k] += v
                 else:
-                    _proteins[k] = v
+                    proteins[k] = v
 
         # Now all proteins for the current chunk are merged
-        for protein_acc in sorted(_proteins):
-            while True:
-                # Find protein in ProteinStore
-                try:
-                    (acc, length, prot_dbcode,
-                     desc_id, left_num) = next(proteins)
-                except Exception as e:
-                    logging.error(protein_acc)
-                    raise e
-                if acc == protein_acc:
-                    break
+        for protein_acc in sorted(proteins):
+            acc, length, prot_dbcode, desc_id, left_num = next(store)
+            while acc < protein_acc:
+                acc, length, prot_dbcode, desc_id, left_num = next(store)
+
+            if acc != protein_acc:
+                # Protein missing from store
+                continue
 
             methods = {}
             matches = []
-            for m in _proteins[protein_acc]:
+            for m in proteins[protein_acc]:
                 (method_acc, method_dbcode, method_type,
                  pos_start, pos_end) = m
 
@@ -1816,7 +965,545 @@ def process_proteins(dsn, con, schema, chunks, processes, max_gap, store,
     return signatures, comparisons, name_organisers, taxon_organisers
 
 
-def load_matches_new(dsn, schema, **kwargs):
+def make_predictions(con, schema, signatures, comparisons):
+    candidates = set()
+    non_prosite_candidates = set()
+    for method_acc, dbcode in con.get(
+            """
+            SELECT METHOD_AC, DBCODE
+            FROM {}.METHOD
+            WHERE CANDIDATE = 'Y'        
+            """.format(schema)
+    ):
+        candidates.add(method_acc)
+        if dbcode != 'P':
+            non_prosite_candidates.add(method_acc)
+
+    # Determine relations/adjacent
+    relations = {}
+    adjacents = {}
+    for acc_1 in comparisons:
+        s_1 = signatures[acc_1]
+
+        for acc_2 in comparisons[acc_1]:
+            s_2 = signatures[acc_2]
+            c = comparisons[acc_1][acc_2]
+
+            if (c['prot_over'] >= s_1['proteins'] * 0.4
+                    or c['prot_over'] >= s_2['proteins'] * 0.4):
+                # is a relation
+                if acc_1 in relations:
+                    relations[acc_1].append(acc_2)
+                else:
+                    relations[acc_1] = [acc_2]
+            elif c['prot'] >= s_1['proteins'] * 0.1:
+                # is adjacent
+                if acc_1 in adjacents:
+                    adjacents[acc_1].append(acc_2)
+                else:
+                    adjacents[acc_1] = [acc_2]
+
+            if acc_1 != acc_2:
+                if (c['prot_over'] >= s_1['proteins'] * 0.4
+                        or c['prot_over'] >= s_2['proteins'] * 0.4):
+                    # is a relation
+                    if acc_2 in relations:
+                        relations[acc_2].append(acc_1)
+                    else:
+                        relations[acc_2] = [acc_1]
+                elif c['prot'] >= s_2['proteins'] * 0.1:
+                    # is adjacent
+                    if acc_2 in adjacents:
+                        adjacents[acc_2].append(acc_1)
+                    else:
+                        adjacents[acc_2] = [acc_1]
+
+    """
+    Determine extra/adjacent relation:
+
+    Let A, and B be two signatures in a relationship.
+    extra relation:
+        num of signatures in a relationship with A but not with B
+    adjacent relation:
+        num of signatures in a relationship with A and adjacent to B
+    """
+    extra_relations = {}
+    adj_relations = {}
+    for acc_1 in relations:
+        # signatures in a relationship with acc_1
+        # (that are candidate and not from PROSITE pattern)
+        rel_1 = set(relations[acc_1]) & non_prosite_candidates
+
+        for acc_2 in relations[acc_1]:
+            # signatures in a relationship with acc_2
+            rel_2 = set(relations.get(acc_2, []))
+
+            # signature adjacent to acc_2
+            adj_2 = set(adjacents.get(acc_2, []))
+
+            extra = rel_1 - rel_2
+            if acc_1 in extra_relations:
+                extra_relations[acc_1][acc_2] = len(extra)
+            else:
+                extra_relations[acc_1] = {acc_2: len(extra)}
+
+            adj = rel_1 & adj_2
+            if acc_1 in adj_relations:
+                adj_relations[acc_1][acc_2] = len(adj)
+            else:
+                adj_relations[acc_1] = {acc_2: len(adj)}
+
+    # Make predictions
+    predictions = []
+    for acc_1 in comparisons:
+        s_1 = signatures[acc_1]
+
+        if acc_1 not in candidates:
+            continue
+
+        for acc_2 in comparisons[acc_1]:
+            if acc_1 == acc_2 or acc_2 not in candidates:
+                continue
+
+            c = comparisons[acc_1][acc_2]
+            s_2 = signatures[acc_2]
+
+            if (c['prot_over'] >= s_1['proteins'] * 0.4
+                    or c['prot_over'] >= s_2['proteins'] * 0.4):
+                extra_1 = extra_relations.get(acc_1, {}).get(acc_2, 0)
+                extra_2 = extra_relations.get(acc_2, {}).get(acc_1, 0)
+
+                """
+                Inverting acc2 and acc1
+                to have the same predictions than HH
+                """
+                # TODO: is this really OK?
+                adj_1 = adj_relations.get(acc_2, {}).get(acc_1, 0)
+                adj_2 = adj_relations.get(acc_1, {}).get(acc_2, 0)
+
+                if c['over']:
+                    """
+                    frac_1 and frac_2 are the sum of ratios
+                    (overlap / match length).
+                    if close to 1:
+                        the match was mostly contained
+                        by the overlap in most cases
+
+                            A   -------------
+                            B       ---
+
+                        frac(B) = overlap(A,B) / length(B)
+                                = 1
+                                indeed B is 100% within the overlap
+
+                    len_1 and len_2 are the average of sums.
+                    If len(B) is close to 1:
+                        B was mostly within the overlap in most cases
+                        so B < A (because B ~ overlap and A >= overlap)
+                        so B CONTAINED_BY A
+                    """
+                    len_1 = c['frac_1'] / c['over']
+                    len_2 = c['frac_2'] / c['over']
+                else:
+                    len_1 = len_2 = 0
+
+                """
+                Parent/Child relationships:
+                The protein/matches made by the child entry
+                    must be a complete (>75%) subset of the parent entry
+
+                if over(A) > 0.75, it means that A overlaps with B
+                    in at least 75% of its proteins or matches:
+                        A is a CHILD_OF B
+                """
+                over_1 = min(
+                    c['over'] / s_1['matches'],
+                    c['prot_over'] / s_1['proteins']
+                )
+                over_2 = min(
+                    c['over'] / s_2['matches'],
+                    c['prot_over'] / s_2['proteins']
+                )
+                if len_1 >= 0.5 and len_2 >= 0.5:
+                    if (over_1 > 0.75 and over_2 >= 0.75 and
+                            not extra_1 and not extra_2):
+                        prediction = 'ADD_TO'
+                    elif over_1 > 0.75 and not extra_1 and not adj_1:
+                        prediction = 'CHILD_OF'
+                    elif over_2 > 0.75 and not extra_2 and not adj_2:
+                        prediction = 'PARENT_OF'  # acc2 child of acc1
+                    elif len_1 >= 0.9:
+                        if len_2 >= 0.9:
+                            prediction = 'C/C'
+                        else:
+                            prediction = 'CONTAINED_BY'
+                    elif len_2 >= 0.9:
+                        prediction = 'CONTAINER_OF'
+                    else:
+                        prediction = 'OVERLAPS'
+                elif len_1 >= 0.9:
+                    prediction = 'CONTAINED_BY'
+                elif len_2 >= 0.9:
+                    prediction = 'CONTAINER_OF'
+                else:
+                    prediction = 'OVERLAPS'
+
+                predictions.append((acc_1, acc_2, prediction))
+
+                # switch (acc_1, acc_2) -> (acc_2, acc_1)
+                if prediction == 'CHILD_OF':
+                    prediction = 'PARENT_OF'
+                elif prediction == 'PARENT_OF':
+                    prediction = 'CHILD_OF'
+                elif prediction == 'CONTAINED_BY':
+                    prediction = 'CONTAINER_OF'
+                elif prediction == 'CONTAINER_OF':
+                    prediction = 'CONTAINED_BY'
+                predictions.append((acc_2, acc_1, prediction))
+
+    # Populating METHOD_PREDICTION
+    for i in range(0, len(predictions), BULK_INSERT_SIZE):
+        con.executemany(
+            """
+            INSERT /*+APPEND*/
+            INTO {}.METHOD_PREDICTION (METHOD_AC1, METHOD_AC2, RELATION)
+            VALUES (:1, :2, :3)
+            """.format(schema),
+            predictions[i:i + BULK_INSERT_SIZE]
+        )
+        con.commit()
+
+    # Optimizing METHOD_PREDICTION
+    con.execute(
+        """
+        ALTER TABLE {}.METHOD_PREDICTION
+        ADD CONSTRAINT PK_METHOD_PREDICTION
+        PRIMARY KEY (METHOD_AC1, METHOD_AC2)
+        """.format(schema)
+    )
+    con.optimize_table(schema, "METHOD_PREDICTION", cascade=True)
+    con.grant("SELECT", schema, "METHOD_PREDICTION", "INTERPRO_SELECT")
+
+    # Populating METHOD_MATCH
+    con.drop_table(schema, "METHOD_MATCH")
+    con.execute(
+        """
+        CREATE TABLE {}.METHOD_MATCH
+        (
+            METHOD_AC VARCHAR2(25) NOT NULL,
+            N_MATCHES NUMBER NOT NULL,
+            N_PROT NUMBER NOT NULL
+        ) NOLOGGING
+        """.format(schema)
+    )
+
+    signatures = [
+        (acc, s['matches'], s['proteins'])
+        for acc, s in signatures.items()
+    ]
+    for i in range(0, len(signatures), BULK_INSERT_SIZE):
+        con.executemany(
+            """
+            INSERT /*+APPEND*/ INTO {}.METHOD_MATCH (
+                METHOD_AC, N_MATCHES, N_PROT
+            )
+            VALUES (:1, :2, :3)
+            """.format(schema),
+            signatures[i:i + BULK_INSERT_SIZE]
+        )
+        con.commit()
+
+    # Optimizing METHOD_MATCH
+    con.execute(
+        """
+        ALTER TABLE {}.METHOD_MATCH
+        ADD CONSTRAINT PK_METHOD_MATCH PRIMARY KEY (METHOD_AC)
+        """.format(schema)
+    )
+    con.optimize_table(schema, "METHOD_MATCH", cascade=True)
+    con.grant("SELECT", schema, "METHOD_MATCH", "INTERPRO_SELECT")
+
+    # Creating METHOD_OVERLAP
+    con.drop_table(schema, "METHOD_OVERLAP")
+    con.execute(
+        """
+        CREATE TABLE {}.METHOD_OVERLAP
+        (
+            METHOD_AC1 VARCHAR2(25) NOT NULL,
+            METHOD_AC2 VARCHAR2(25) NOT NULL,
+            N_PROT NUMBER NOT NULL,
+            N_OVER NUMBER NOT NULL,
+            N_PROT_OVER NUMBER NOT NULL,
+            AVG_OVER NUMBER NOT NULL,
+            AVG_FRAC1 NUMBER NOT NULL,
+            AVG_FRAC2 NUMBER NOT NULL
+        ) NOLOGGING
+        """.format(schema)
+    )
+
+    # Computing data for METHOD_OVERLAP
+    overlaps = []
+    for acc_1 in comparisons:
+        for acc_2 in comparisons[acc_1]:
+            c = comparisons[acc_1][acc_2]
+
+            if c['over']:
+                avg_frac1 = 100 * c['frac_1'] / c['over']
+                avg_frac2 = 100 * c['frac_2'] / c['over']
+                avg_over = c['length'] / c['over']
+            else:
+                avg_frac1 = avg_frac2 = avg_over = 0
+
+            """
+            Cast to float as cx_Oracle 6.1 throws TypeError
+                (expecting integer)
+            when the value of the 1st record is an integer
+                (e.g. AVG_OVER=0)
+            and the value for the second is not (e.g. AVG_OVER=25.6)
+            """
+            overlaps.append((
+                acc_1, acc_2, c['prot'], c['over'], c['prot_over'],
+                float(avg_over), float(avg_frac1), float(avg_frac2)
+            ))
+
+            if acc_1 != acc_2:
+                overlaps.append((
+                    acc_2, acc_1, c['prot'], c['over'], c['prot_over'],
+                    float(avg_over), float(avg_frac2), float(avg_frac1)
+                ))
+
+    # Populating METHOD_OVERLAP
+    for i in range(0, len(overlaps), BULK_INSERT_SIZE):
+        con.executemany(
+            """
+            INSERT /*+APPEND*/ INTO {}.METHOD_OVERLAP (
+                METHOD_AC1, METHOD_AC2, N_PROT, N_OVER,
+                N_PROT_OVER, AVG_OVER, AVG_FRAC1, AVG_FRAC2
+            )
+            VALUES (:1, :2, :3, :4, :5, :6, :7, :8)
+            """.format(schema),
+            overlaps[i:i + BULK_INSERT_SIZE]
+        )
+        con.commit()
+
+    # Optimizing METHOD_OVERLAP
+    con.execute(
+        """
+        ALTER TABLE {}.METHOD_OVERLAP
+        ADD CONSTRAINT PK_METHOD_OVERLAP
+        PRIMARY KEY (METHOD_AC1, METHOD_AC2)
+        """.format(schema)
+    )
+    con.optimize_table(schema, "METHOD_OVERLAP", cascade=True)
+    con.grant("SELECT", schema, "METHOD_OVERLAP", "INTERPRO_SELECT")
+
+    # Creating METHOD_PREDICTION
+    con.drop_table(schema, "METHOD_PREDICTION")
+    con.execute(
+        """
+        CREATE TABLE {}.METHOD_PREDICTION
+        (
+            METHOD_AC1 VARCHAR2(25) NOT NULL,
+            METHOD_AC2 VARCHAR2(25) NOT NULL,
+            RELATION VARCHAR2(15) NOT NULL
+        ) NOLOGGING
+        """.format(schema)
+    )
+
+
+def optimize_method2protein(con, schema):
+    con.execute(
+        """
+        ALTER TABLE {}.METHOD2PROTEIN
+        ADD CONSTRAINT PK_METHOD2PROTEIN
+        PRIMARY KEY (METHOD_AC, PROTEIN_AC)
+        """.format(schema)
+    )
+    con.execute(
+        """
+        CREATE INDEX I_METHOD2PROTEIN$M
+        ON {}.METHOD2PROTEIN (METHOD_AC)
+        NOLOGGING
+        """.format(schema)
+    )
+    con.execute(
+        """
+        CREATE INDEX I_METHOD2PROTEIN$P
+        ON {}.METHOD2PROTEIN (PROTEIN_AC)
+        NOLOGGING
+        """.format(schema)
+    )
+    con.execute(
+        """
+        CREATE INDEX I_METHOD2PROTEIN$LN
+        ON {}.METHOD2PROTEIN (LEFT_NUMBER)
+        NOLOGGING
+        """.format(schema)
+    )
+    con.execute(
+        """
+        CREATE INDEX I_METHOD2PROTEIN$M$DB
+        ON {}.METHOD2PROTEIN (METHOD_AC, DBCODE)
+        NOLOGGING
+        """.format(schema)
+    )
+
+    con.optimize_table(schema, "METHOD2PROTEIN", cascade=True)
+    con.grant("SELECT", schema, "METHOD2PROTEIN", "INTERPRO_SELECT")
+
+
+def aggregate_descriptions(src, dst):
+    for method_acc, (desc_id, dbcode) in src.items():
+        if method_acc in dst:
+            s = dst[method_acc]
+        else:
+            s = dst[method_acc] = {}
+
+        i = 0 if dbcode == 'S' else 1
+        if desc_id in s:
+            s[desc_id][i] += 1
+        else:
+            s[desc_id] = [0, 0]
+            s[desc_id][i] += 1
+
+
+def load_description_counts(con, schema, organisers):
+    con.drop_table(schema, "METHOD_DESC")
+    con.execute(
+        """
+        CREATE TABLE {}.METHOD_DESC
+        (
+            METHOD_AC VARCHAR2(25) NOT NULL,
+            DESC_ID NUMBER(10) NOT NULL,
+            REVIEWED_COUNT NUMBER(10) NOT NULL,
+            UNREVIEWED_COUNT NUMBER(10) NOT NULL
+        ) NOLOGGING
+        """.format(schema)
+    )
+
+    signatures = {}
+    n = organisers[0].size
+    for _ in range(n):
+        for organiser in organisers:
+            aggregate_descriptions(next(organiser), signatures)
+
+    data = []
+    for method_acc, descriptions in signatures.items():
+        for desc_id, dbcodes in descriptions.items():
+            data.append((method_acc, desc_id, dbcodes.get('S', 0),
+                         dbcodes.get('T', 0)))
+
+            if len(data) == BULK_INSERT_SIZE:
+                con.executemany(
+                    """
+                    INSERT /*+APPEND*/ INTO {}.METHOD_DESC
+                    VALUES (:1, :2, :3, :4)
+                    """.format(schema),
+                    data
+                )
+                con.commit()
+                data = []
+
+    if data:
+        con.executemany(
+            """
+            INSERT /*+APPEND*/ INTO {}.METHOD_DESC
+            VALUES (:1, :2, :3, :4)
+            """.format(schema),
+            data
+        )
+        con.commit()
+
+    con.execute(
+        """
+        ALTER TABLE {}.METHOD_DESC
+        ADD CONSTRAINT PK_METHOD_DESC
+        PRIMARY KEY (METHOD_AC, DESC_ID)
+        NOLOGGING
+        """.format(schema)
+    )
+    con.optimize_table(schema, "METHOD_DESC", cascade=True)
+    con.grant("SELECT", schema, "METHOD_DESC", "INTERPRO_SELECT")
+
+
+def aggregate_taxa(src, dst):
+    for method_acc, (rank, tax_id) in src.items():
+        if method_acc in dst:
+            s = dst[method_acc]
+        else:
+            s = dst[method_acc] = {}
+
+        if rank in s:
+            r = s[rank]
+        else:
+            r = s[rank] = {}
+
+        if tax_id in r:
+            r[tax_id] += 1
+        else:
+            r[tax_id] = 1
+
+
+def load_taxonomy_counts(con, schema, organisers):
+    con.drop_table(schema, "METHOD_TAXA")
+    con.execute(
+        """
+        CREATE TABLE {}.METHOD_TAXA
+        (
+            METHOD_AC VARCHAR2(25) NOT NULL,
+            RANK VARCHAR2(50) NOT NULL,
+            TAX_ID NUMBER(10) NOT NULL,
+            PROTEIN_COUNT NUMBER(10) NOT NULL
+        ) NOLOGGING
+        """.format(schema)
+    )
+
+    signatures = {}
+    n = organisers[0].size
+    for _ in range(n):
+        for organiser in organisers:
+            aggregate_taxa(next(organiser), signatures)
+
+    data = []
+    for method_acc, ranks in signatures.items():
+        for rank, taxa in ranks.items():
+            for tax_id, count in taxa.items():
+                data.append((method_acc, rank, tax_id, count))
+
+                if len(data) == BULK_INSERT_SIZE:
+                    con.executemany(
+                        """
+                        INSERT /*+APPEND*/ INTO {}.METHOD_TAXA
+                        VALUES (:1, :2, :3, :4)
+                        """.format(schema),
+                        data
+                    )
+                    con.commit()
+                    data = []
+
+    if data:
+        con.executemany(
+            """
+            INSERT /*+APPEND*/ INTO {}.METHOD_TAXA
+            VALUES (:1, :2, :3, :4)
+            """.format(schema),
+            data
+        )
+        con.commit()
+
+    con.execute(
+        """
+        ALTER TABLE {}.METHOD_TAXA
+        ADD CONSTRAINT PK_METHOD_TAXA
+        PRIMARY KEY (METHOD_AC, RANK, TAX_ID)
+        NOLOGGING
+        """.format(schema)
+    )
+    con.optimize_table(schema, "METHOD_TAXA", cascade=True)
+    con.grant("SELECT", schema, "METHOD_TAXA", "INTERPRO_SELECT")
+
+
+def load_matches(dsn, schema, **kwargs):
     processes = kwargs.get("processes", 3)
     max_gap = kwargs.get("max_gap", 20)
     tmpdir = kwargs.get("tmpdir")
@@ -1824,48 +1511,45 @@ def load_matches_new(dsn, schema, **kwargs):
     if tmpdir:
         os.makedirs(tmpdir, exist_ok=True)
 
-    # con.drop_table(schema, "METHOD2PROTEIN")
-    # con.execute(
-    #     """
-    #     CREATE TABLE {}.METHOD2PROTEIN
-    #     (
-    #         METHOD_AC VARCHAR2(25) NOT NULL,
-    #         PROTEIN_AC VARCHAR2(15) NOT NULL,
-    #         DBCODE CHAR(1) NOT NULL,
-    #         MD5 VARCHAR(32) NOT NULL,
-    #         LEN NUMBER(5) NOT NULL,
-    #         LEFT_NUMBER NUMBER NOT NULL,
-    #         DESC_ID NUMBER(10) NOT NULL
-    #     ) NOLOGGING
-    #     """.format(schema)
-    # )
-
-    logging.info("dumping proteins")
-    store = io.ProteinStore(dir=tmpdir, mode="wb")
     con = Connection(dsn)
-    chunks = dump_proteins(con, schema, store)
-    logging.info("{}: {}".format(store.path, os.path.getsize(store.path)))
+    with io.ProteinStore(dir=tmpdir, mode="wb") as store:
+        logging.info("dumping proteins")
+        chunks = dump_proteins(con, schema, store)
+        logging.info("{}: {}".format(store.path, os.path.getsize(store.path)))
 
-    # Creating MATCH table (in a separate process)
-    loader = Process(target=insert_matches, args=(dsn, schema))
-    loader.start()
+        # Creating MATCH table (in a separate process)
+        loader = Process(target=insert_matches, args=(dsn, schema))
+        loader.start()
 
-    # -1 for loader, -1 for main process
-    processes = max(1, processes - 2)
+        # -1 for loader, -1 for main process
+        processes = max(1, processes - 2)
 
-    # Dumping matches (non-fragment proteins only)
-    logging.info("dumping matches")
-    organisers = dump_matches(con, schema, chunks, processes, tmpdir)
+        # Dumping matches (non-fragment proteins only)
+        logging.info("dumping matches")
+        organisers = dump_matches(con, schema, chunks, processes, tmpdir)
 
-    logging.info("processing proteins")
-    res = process_proteins(dsn, con, schema, chunks, processes, max_gap,
-                           store, organisers, tmpdir)
-    signatures, comparisons, name_organisers, taxon_organisers = res
+        logging.info("processing proteins")
+        res = process_proteins(dsn, con, schema, chunks, processes, max_gap,
+                               store, organisers, tmpdir)
+        signatures, comparisons, name_organisers, taxon_organisers = res
+        store.temporary = False  # TODO: remove after debug
 
-    store.close()  # close/delete protein store (don't need any more)
-
+    # Populating/optimizing overlap/prediction tables
     logging.info("making predictions")
+    make_predictions(con, schema, signatures, comparisons)
 
+    # Creating constraints/indexes
+    logging.info("optimizing METHOD2PROTEIN")
+    optimize_method2protein(con, schema)
+
+    # Insert signature counts
+    logging.info("creating METHOD_DESC")
+    load_description_counts(con, schema, name_organisers)
+
+    logging.info("creating METHOD_TAXA")
+    load_taxonomy_counts(con, schema, taxon_organisers)
+
+    # Join loader process (which probably completed a while ago)
     loader.join()
 
 
