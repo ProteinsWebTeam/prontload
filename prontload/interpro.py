@@ -1160,8 +1160,20 @@ def make_predictions(con, schema, signatures, comparisons):
                 elif prediction == 'CONTAINER_OF':
                     prediction = 'CONTAINED_BY'
                 predictions.append((acc_2, acc_1, prediction))
-
+               
     # Populating METHOD_PREDICTION
+    con.drop_table(schema, "METHOD_PREDICTION")
+    con.execute(
+        """
+        CREATE TABLE {}.METHOD_PREDICTION
+        (
+            METHOD_AC1 VARCHAR2(25) NOT NULL,
+            METHOD_AC2 VARCHAR2(25) NOT NULL,
+            RELATION VARCHAR2(15) NOT NULL
+        ) NOLOGGING
+        """.format(schema)
+    )
+
     for i in range(0, len(predictions), BULK_INSERT_SIZE):
         con.executemany(
             """
@@ -1296,19 +1308,6 @@ def make_predictions(con, schema, signatures, comparisons):
     )
     con.optimize_table(schema, "METHOD_OVERLAP", cascade=True)
     con.grant("SELECT", schema, "METHOD_OVERLAP", "INTERPRO_SELECT")
-
-    # Creating METHOD_PREDICTION
-    con.drop_table(schema, "METHOD_PREDICTION")
-    con.execute(
-        """
-        CREATE TABLE {}.METHOD_PREDICTION
-        (
-            METHOD_AC1 VARCHAR2(25) NOT NULL,
-            METHOD_AC2 VARCHAR2(25) NOT NULL,
-            RELATION VARCHAR2(15) NOT NULL
-        ) NOLOGGING
-        """.format(schema)
-    )
 
 
 def optimize_method2protein(con, schema):
