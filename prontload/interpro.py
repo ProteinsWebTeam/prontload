@@ -608,7 +608,7 @@ def insert_matches(dsn, schema):
 
     """
     Insert directly signature matches and MobiDB-lite matches
-    For some signature matches, the HMM model accession 
+    For some signature matches, the HMM model accession
         is the signature accession itself: in such cases, use NULL
     """
     con.execute(
@@ -664,10 +664,10 @@ def dump_proteins(con, schema, store, size=1000000):
     cnt = size
     for row in con.get(
             """
-            SELECT 
+            SELECT
               P.PROTEIN_AC, P.LEN, P.DBCODE, D.DESC_ID, NVL(E.LEFT_NUMBER, 0)
             FROM {0}.PROTEIN P
-            INNER JOIN {0}.ETAXI E 
+            INNER JOIN {0}.ETAXI E
               ON P.TAX_ID = E.TAX_ID
             INNER JOIN {0}.PROTEIN_DESC D
               ON P.PROTEIN_AC = D.PROTEIN_AC
@@ -744,7 +744,7 @@ def dump_matches(con, schema, chunks, processes, tmpdir=None):
               INNER JOIN {0}.ETAXI E
                 ON P.TAX_ID = E.TAX_ID
               INNER JOIN {0}.PROTEIN_DESC D
-                ON P.PROTEIN_AC = D.PROTEIN_AC   
+                ON P.PROTEIN_AC = D.PROTEIN_AC
               WHERE P.FRAGMENT = 'N'
             )
             """.format(schema)
@@ -972,7 +972,7 @@ def make_predictions(con, schema, signatures, comparisons):
             """
             SELECT METHOD_AC, DBCODE
             FROM {}.METHOD
-            WHERE CANDIDATE = 'Y'        
+            WHERE CANDIDATE = 'Y'
             """.format(schema)
     ):
         candidates.add(method_acc)
@@ -1160,7 +1160,7 @@ def make_predictions(con, schema, signatures, comparisons):
                 elif prediction == 'CONTAINER_OF':
                     prediction = 'CONTAINED_BY'
                 predictions.append((acc_2, acc_1, prediction))
-               
+
     # Populating METHOD_PREDICTION
     con.drop_table(schema, "METHOD_PREDICTION")
     con.execute(
@@ -1352,18 +1352,19 @@ def optimize_method2protein(con, schema):
 
 
 def aggregate_descriptions(src, dst):
-    for method_acc, (desc_id, dbcode) in src.items():
+    for method_acc, descriptions in src.items():
         if method_acc in dst:
             s = dst[method_acc]
         else:
             s = dst[method_acc] = {}
 
-        i = 0 if dbcode == 'S' else 1
-        if desc_id in s:
-            s[desc_id][i] += 1
-        else:
-            s[desc_id] = [0, 0]
-            s[desc_id][i] += 1
+        for desc_id, dbcode in descriptions:
+            i = 0 if dbcode == 'S' else 1
+            if desc_id in s:
+                s[desc_id][i] += 1
+            else:
+                s[desc_id] = [0, 0]
+                s[desc_id][i] += 1
 
 
 def load_description_counts(con, schema, organisers):
@@ -1426,21 +1427,22 @@ def load_description_counts(con, schema, organisers):
 
 
 def aggregate_taxa(src, dst):
-    for method_acc, (rank, tax_id) in src.items():
+    for method_acc, taxa in src.items():
         if method_acc in dst:
             s = dst[method_acc]
         else:
             s = dst[method_acc] = {}
 
-        if rank in s:
-            r = s[rank]
-        else:
-            r = s[rank] = {}
+        for rank, tax_id in taxa:
+            if rank in s:
+                r = s[rank]
+            else:
+                r = s[rank] = {}
 
-        if tax_id in r:
-            r[tax_id] += 1
-        else:
-            r[tax_id] = 1
+            if tax_id in r:
+                r[tax_id] += 1
+            else:
+                r[tax_id] = 1
 
 
 def load_taxonomy_counts(con, schema, organisers):
