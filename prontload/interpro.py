@@ -15,7 +15,17 @@ from .oracledb import Connection
 BULK_INSERT_SIZE = 100000
 
 
-def create_synonyms(dsn, src, dst, tables=[]):
+def create_synonyms(dsn, src, dst):
+    tables = (
+        "ENTRY",
+        "ENTRY2METHOD",
+        "ENTRY2ENTRY",
+        "ENTRY2COMP",
+        "METHOD2SWISS_DE",
+        "METHOD_COMMENT",
+        "USER_PRONTO"
+    )
+
     con = Connection(dsn)
     for table_name in tables:
         query = ("CREATE OR REPLACE SYNONYM {0}.{2} "
@@ -68,7 +78,8 @@ def load_signatures(dsn, schema):
             DBCODE CHAR(1) NOT NULL,
             CANDIDATE CHAR(1) NOT NULL,
             DESCRIPTION VARCHAR2(220),
-            SIG_TYPE CHAR(1)
+            SIG_TYPE CHAR(1),
+            PROTEIN_COUNT NUMBER(8) DEFAULT 0 NOT NULL
         ) NOLOGGING
         """.format(schema)
     )
@@ -583,7 +594,7 @@ def iter_matches(con, schema, order=True):
         yield row
 
 
-def insert_matches(dsn, schema):
+def insert_matches(dsn, schema, queue):
     con = Connection(dsn)
 
     # Dropping (if exists) and recreating table
@@ -647,13 +658,32 @@ def insert_matches(dsn, schema):
     )
     con.execute(
         """
+        CREATE INDEX I_MATCH$METHOD
+        ON {}.MATCH (METHOD_AC) NOLOGGING
+        """.format(schema)
+    )
+    con.execute(
+        """
         CREATE INDEX I_MATCH$DBCODE
         ON {}.MATCH (DBCODE) NOLOGGING
         """.format(schema)
     )
     con.optimize_table(schema, "MATCH", cascade=True)
     con.grant("SELECT", schema, "MATCH", "INTERPRO_SELECT")
+
     logging.info("MATCH table ready")
+    methods = {}
+    for method_acc, count in con.get(
+        """
+        SELECT METHOD_AC, COUNT(DISTINCT PROTEIN_AC)
+        FROM {}.MATCH
+        GROUP METHOD_AC
+        """.format(schema)
+    ):
+        methods[method_acc] = count
+
+    logging.info("protein count for {} signatures".format(len(methods)))
+    queue.put(methods)
 
 
 def dump_proteins(con, schema, store, size=1000000):
@@ -1505,6 +1535,20 @@ def load_taxonomy_counts(con, schema, organisers):
     con.grant("SELECT", schema, "METHOD_TAXA", "INTERPRO_SELECT")
 
 
+def update_signatures(con, schema, protein_counts):
+    for method_acc, count in protein_counts.items():
+        con.execute(
+            """
+            UPDATE {}.METHOD
+            SET PROTEIN_COUNT = :1
+            WHERE METHOD_AC = :2
+            """.format(schema),
+            (count, method_acc)
+        )
+
+    con.commit()
+
+
 def load_matches(dsn, schema, **kwargs):
     processes = kwargs.get("processes", 3)
     max_gap = kwargs.get("max_gap", 20)
@@ -1514,7 +1558,8 @@ def load_matches(dsn, schema, **kwargs):
         os.makedirs(tmpdir, exist_ok=True)
 
     # Creating MATCH table (in a separate process)
-    loader = Process(target=insert_matches, args=(dsn, schema))
+    queue = Queue(maxsize=1)
+    loader = Process(target=insert_matches, args=(dsn, schema, queue))
     loader.start()
 
     con = Connection(dsn)
@@ -1551,8 +1596,10 @@ def load_matches(dsn, schema, **kwargs):
     logging.info("creating METHOD_TAXA")
     load_taxonomy_counts(con, schema, taxon_organisers)
 
-    # Join loader process (which probably completed a while ago)
+    logging.info("updating METHOD")
+    protein_counts = queue.get()
     loader.join()
+    update_signatures(con, schema, protein_counts)
 
 
 def copy_schema(dsn, schema):
