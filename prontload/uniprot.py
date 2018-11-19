@@ -1,13 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import gzip
-import json
-import os
+import logging
 import math
-from tempfile import mkstemp
 
 from .oracledb import Connection
+from . import io
 
 
 def load_comments(dsn, schema, chunk_size=100000):
@@ -166,67 +164,69 @@ def load_descriptions(dsn, schema, tmpdir=None, chunk_size=100000):
         WHERE R = 1
         ORDER BY DESCR    
     """
-    descriptions = []
-    proteins = set()
-    files = []
-    _text = None
-    for text, accession in con.get(query):
-        if text != _text:
-            if _text:
-                descriptions.append({
-                    "text": _text,
-                    "proteins": list(proteins)
-                })
+    with io.Store(dir=tmpdir, mode="wb") as store:
+        descriptions = []
+        proteins = set()
+        _text = None
+        for text, accession in con.get(query):
+            if text != _text:
+                if _text:
+                    descriptions.append({
+                        "text": _text,
+                        "proteins": proteins
+                    })
 
-                if len(descriptions) == chunk_size:
-                    files.append(_dump_descriptions(descriptions, tmpdir))
-                    descriptions = []
+                    if len(descriptions) == chunk_size:
+                        store.add(descriptions)
+                        descriptions = []
 
-            proteins = set()
-            _text = text
+                proteins = set()
+                _text = text
 
-        proteins.add(accession)
+            proteins.add(accession)
 
-    if proteins:
-        descriptions.append({
-            "text": _text,
-            "proteins": list(proteins)
-        })
-        files.append(_dump_descriptions(descriptions, tmpdir))
+        if proteins:
+            descriptions.append({
+                "text": _text,
+                "proteins": proteins
+            })
+            store.add(descriptions)
 
-    desc_id = 1
-    for filepath in files:
-        with gzip.open(filepath, "rt") as fh:
-            descriptions = json.load(fh)
+        logging.info("temporary file: {:,} bytes".format(store.size))
 
-        os.unlink(filepath)
+        desc_id = 1
+        for descriptions in store:
+            cv_table = []
+            rel_table = []
+            for d in descriptions:
+                cv_table.append((desc_id, d["text"]))
+                rel_table += [
+                    (accession, desc_id)
+                    for accession in d["proteins"]
+                ]
+                desc_id += 1
 
-        cv_table = []
-        rel_table = []
-        for d in descriptions:
-            cv_table.append((desc_id, d["text"]))
-            rel_table += [(accession, desc_id) for accession in d["proteins"]]
-            desc_id += 1
-
-        con.executemany(
-            """
-            INSERT /*+ APPEND */ INTO {}.DESC_VALUE (DESC_ID, TEXT)
-            VALUES (:1, :2)            
-            """.format(schema),
-            cv_table
-        )
-        # Commit after each transaction to avoid ORA-12838
-        con.commit()
-
-        for i in range(0, len(rel_table), chunk_size):
             con.executemany(
                 """
-                INSERT /*+ APPEND */ INTO {}.PROTEIN_DESC (PROTEIN_AC, DESC_ID)
-                VALUES (:1, :2)                
+                INSERT /*+ APPEND */ INTO {}.DESC_VALUE (DESC_ID, TEXT)
+                VALUES (:1, :2)            
                 """.format(schema),
-                rel_table[i:i+chunk_size]
+                cv_table
             )
+            # Commit after each transaction to avoid ORA-12838
             con.commit()
+
+            for i in range(0, len(rel_table), chunk_size):
+                con.executemany(
+                    """
+                    INSERT /*+ APPEND */ INTO {}.PROTEIN_DESC (
+                        PROTEIN_AC, DESC_ID
+                    )
+                    VALUES (:1, :2)                
+                    """.format(schema),
+                    rel_table[i:i+chunk_size]
+                )
+                con.commit()
 
     con.execute(
         """
@@ -245,16 +245,6 @@ def load_descriptions(dsn, schema, tmpdir=None, chunk_size=100000):
     for table in tables:
         con.optimize_table(schema, table, cascade=True)
         con.grant("SELECT", schema, table, "INTERPRO_SELECT")
-
-
-def _dump_descriptions(descriptions, tmpdir=None):
-    fd, filepath = mkstemp(suffix=".json.gz", dir=tmpdir)
-    os.close(fd)
-
-    with gzip.open(filepath, "wt") as fh:
-        json.dump(descriptions, fh)
-
-    return filepath
 
 
 def load_enzymes(dsn, schema):
