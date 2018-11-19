@@ -65,13 +65,7 @@ def cli():
         {
             "name": "synonyms",
             "func": interpro.create_synonyms,
-            "args": (dsn, "INTERPRO", schema, (
-                "ENTRY",
-                "ENTRY2METHOD",
-                "ENTRY2ENTRY",
-                "ENTRY2COMP",
-                "METHOD2SWISS_DE"
-            ))
+            "args": (dsn, "INTERPRO", schema)
         },
         {
             "name": "databases",
