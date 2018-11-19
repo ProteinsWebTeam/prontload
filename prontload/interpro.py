@@ -1359,12 +1359,10 @@ def aggregate_descriptions(src, dst):
             s = dst[method_acc] = {}
 
         for desc_id, dbcode in descriptions:
-            i = 0 if dbcode == 'S' else 1
-            if desc_id in s:
-                s[desc_id][i] += 1
-            else:
-                s[desc_id] = [0, 0]
-                s[desc_id][i] += 1
+            if desc_id not in s:
+                s[desc_id] = {'S': 0, 'T': 0}
+
+            s[desc_id][dbcode] += 1
 
 
 def load_description_counts(con, schema, organisers):
