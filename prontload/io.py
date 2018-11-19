@@ -26,6 +26,20 @@ class Organiser(object):
         ]
         self.index = 0
 
+    def __iter__(self):
+        self.index = 0
+        return self
+
+    def __next__(self):
+        try:
+            b = self.buckets[self.index]
+        except IndexError:
+            raise StopIteration
+        else:
+            self.index += 1
+            with open(b["path"], "rb") as fh:
+                return pickle.load(fh)
+
     @property
     def size(self):
         return len(self.buckets)
@@ -81,22 +95,8 @@ class Organiser(object):
             os.remove(b["path"])
         os.rmdir(self.path)
 
-    def __iter__(self):
-        self.index = 0
-        return self
 
-    def __next__(self):
-        try:
-            b = self.buckets[self.index]
-        except IndexError:
-            raise StopIteration
-        else:
-            self.index += 1
-            with open(b["path"], "rb") as fh:
-                return pickle.load(fh)
-
-
-class ProteinStore(object):
+class Store(object):
     def __init__(self, path=None, dir=None, mode="rb"):
         if path:
             self.path = path
@@ -108,20 +108,6 @@ class ProteinStore(object):
             self.temporary = True
 
         self.fh = open(self.path, mode)
-
-    def add(self, obj):
-        # Expects `self.path` to be open for writing
-        pickle.dump(obj, self.fh)
-
-    def close(self):
-        if self.fh is not None:
-            self.fh.close()
-            self.fh = None
-
-    def remove(self):
-        if self.temporary and self.path is not None:
-            os.remove(self.path)
-            self.path = None
 
     def __enter__(self):
         return self
@@ -146,3 +132,24 @@ class ProteinStore(object):
             raise StopIteration
         else:
             return obj
+
+    @property
+    def size(self):
+        try:
+            return os.path.getsize(self.path)
+        except (FileNotFoundError, TypeError):
+            return 0
+
+    def add(self, obj):
+        # Expects `self.path` to be open for writing
+        pickle.dump(obj, self.fh)
+
+    def close(self):
+        if self.fh is not None:
+            self.fh.close()
+            self.fh = None
+
+    def remove(self):
+        if self.temporary and self.path is not None:
+            os.remove(self.path)
+            self.path = None
