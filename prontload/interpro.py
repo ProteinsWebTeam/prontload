@@ -677,7 +677,7 @@ def insert_matches(dsn, schema, queue):
         """
         SELECT METHOD_AC, COUNT(DISTINCT PROTEIN_AC)
         FROM {}.MATCH
-        GROUP METHOD_AC
+        GROUP BY METHOD_AC
         """.format(schema)
     ):
         methods[method_acc] = count
