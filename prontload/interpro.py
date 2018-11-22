@@ -1576,7 +1576,7 @@ def load_matches(dsn, schema, **kwargs):
         organisers = dump_matches(con, schema, chunks, processes, tmpdir)
 
         logging.info("processing proteins")
-        _ - input("press key:")
+        _ = input("press key:")
         res = process_proteins(dsn, con, schema, processes, max_gap,
                                store, organisers, tmpdir)
         signatures, comparisons, name_organisers, taxon_organisers = res
