@@ -15,7 +15,6 @@ class Organiser(object):
             self.path = mkdtemp(dir=dir)
         else:
             self.path = path
-            os.makedirs(self.path, exist_ok=True)
 
         self.buckets = [
             {
@@ -55,6 +54,17 @@ class Organiser(object):
         else:
             raise ValueError(key)
 
+    def incr(self, key):
+        i = bisect.bisect_right(self.keys, key)
+        if i:
+            bucket = self.buckets[i-1]
+            if key in bucket["data"]:
+                bucket["data"][key] += 1
+            else:
+                bucket["data"][key] = 1
+        else:
+            raise ValueError(key)
+
     def dump(self):
         for b in self.buckets:
             if b["data"]:
@@ -88,7 +98,7 @@ class Organiser(object):
 
             size_after += os.path.getsize(b["path"])
 
-        return size_before, size_after
+        return max(size_before, size_after)
 
     def remove(self):
         for b in self.buckets:
@@ -129,6 +139,7 @@ class Store(object):
         try:
             obj = pickle.load(self.fh)
         except EOFError:
+            self.close()
             raise StopIteration
         else:
             return obj
