@@ -432,19 +432,11 @@ class ProteinConsumer(Process):
             organiser_names.dump()
             organiser_taxa.dump()
 
-        size_before, size_after = organiser_names.merge()
-        logging.info("names: {}: {} bytes (before); {} bytes (after)".format(
-            os.path.basename(organiser_names.path),
-            size_before,
-            size_after
-        ))
+        size = organiser_names.merge()
+        logging.info("names: {} bytes".format(size))
 
-        size_before, size_after = organiser_taxa.merge()
-        logging.info("taxa: {}: {} bytes (before); {} bytes (after)".format(
-            os.path.basename(organiser_taxa.path),
-            size_before,
-            size_after
-        ))
+        size = organiser_taxa.merge()
+        logging.info("taxa: {} bytes".format(size))
 
         self.queue_out.put((
             signatures,
