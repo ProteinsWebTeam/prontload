@@ -724,7 +724,7 @@ def _dump_matches(organiser, in_queue, out_queue):
         organiser.dump()
 
     size = organiser.merge()
-    queue_out.put(size)
+    out_queue.put(size)
 
 
 def dump_matches(con, schema, chunks, processes, tmpdir=None,
