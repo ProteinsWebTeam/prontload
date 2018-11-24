@@ -2,13 +2,14 @@
 # -*- coding: utf-8 -*-
 
 import bisect
+import gzip
 import os
 import pickle
 from tempfile import mkdtemp, mkstemp
 
 
 class Organiser(object):
-    def __init__(self, keys, path=None, dir=None):
+    def __init__(self, keys, path=None, dir=None, compress=False):
         self.keys = keys
 
         if path is None:
@@ -16,6 +17,8 @@ class Organiser(object):
         else:
             self.path = path
             os.makedirs(self.path, exist_ok=True)
+
+        self.open = gzip.open if compress else open
 
         self.buckets = [
             {
@@ -37,7 +40,7 @@ class Organiser(object):
             raise StopIteration
         else:
             self.index += 1
-            with open(b["path"], "rb") as fh:
+            with self.open(b["path"], "rb") as fh:
                 return pickle.load(fh)
 
     @property
@@ -69,7 +72,7 @@ class Organiser(object):
     def dump(self):
         for b in self.buckets:
             if b["data"]:
-                with open(b["path"], "ab") as fh:
+                with self.open(b["path"], "ab") as fh:
                     pickle.dump(b["data"], fh)
                 b["data"] = {}
 
@@ -81,7 +84,7 @@ class Organiser(object):
             size_before += os.path.getsize(b["path"])
 
             data = {}
-            with open(b["path"], "rb") as fh:
+            with self.open(b["path"], "rb") as fh:
                 while True:
                     try:
                         chunk = pickle.load(fh)
@@ -94,7 +97,7 @@ class Organiser(object):
                             else:
                                 data[key] = value
 
-            with open(b["path"], "wb") as fh:
+            with self.open(b["path"], "wb") as fh:
                 pickle.dump(data, fh)
 
             size_after += os.path.getsize(b["path"])
