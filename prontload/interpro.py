@@ -1537,7 +1537,7 @@ def load_matches(dsn, schema, **kwargs):
     with io.Store(dir=tmpdir) as store:
         logging.info("dumping proteins")
         chunks = dump_proteins(con, schema, store)
-        logging.info("{}: {}".format(store.path, os.path.getsize(store.path)))
+        logging.info("{}: {}".format(store.path, store.size))
 
         # -1 for main process, -1 for loader
         processes = max(1, processes - 2)
@@ -1550,7 +1550,6 @@ def load_matches(dsn, schema, **kwargs):
         res = process_proteins(dsn, con, schema, processes, max_gap,
                                store, organisers, tmpdir)
         signatures, comparisons, name_organisers, taxon_organisers = res
-        store.temporary = False  # TODO: remove after debug
 
     # Populating/optimizing overlap/prediction tables
     logging.info("making predictions")

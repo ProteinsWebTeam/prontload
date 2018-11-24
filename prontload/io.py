@@ -22,10 +22,10 @@ class Organiser(object):
 
         self.buckets = [
             {
-                "path": os.path.join(self.path, str(key)),
+                "path": os.path.join(self.path, str(i+1)),
                 "data": {}
             }
-            for key in self.keys
+            for i in range(len(self.keys))
         ]
         self.index = 0
 
@@ -58,17 +58,6 @@ class Organiser(object):
         else:
             raise ValueError(key)
 
-    def incr(self, key):
-        i = bisect.bisect_right(self.keys, key)
-        if i:
-            bucket = self.buckets[i-1]
-            if key in bucket["data"]:
-                bucket["data"][key] += 1
-            else:
-                bucket["data"][key] = 1
-        else:
-            raise ValueError(key)
-
     def dump(self):
         for b in self.buckets:
             if b["data"]:
@@ -81,21 +70,21 @@ class Organiser(object):
         size_after = 0
 
         for b in self.buckets:
-            size_before += os.path.getsize(b["path"])
-
             data = {}
-            with self.open(b["path"], "rb") as fh:
-                while True:
-                    try:
-                        chunk = pickle.load(fh)
-                    except EOFError:
-                        break
-                    else:
-                        for key, value in chunk.items():
-                            if key in data:
-                                data[key] += value
-                            else:
-                                data[key] = value
+            if os.path.isfile(b["path"]):
+                size_before += os.path.getsize(b["path"])
+                with self.open(b["path"], "rb") as fh:
+                    while True:
+                        try:
+                            chunk = pickle.load(fh)
+                        except EOFError:
+                            break
+                        else:
+                            for key, value in chunk.items():
+                                if key in data:
+                                    data[key] += value
+                                else:
+                                    data[key] = value
 
             with self.open(b["path"], "wb") as fh:
                 pickle.dump(data, fh)
