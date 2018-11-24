@@ -849,7 +849,8 @@ def process_proteins(dsn, con, schema, processes, max_gap, store,
     chunk = []
     ts = time.time()
 
-    iter(store)  # Open store for iterating
+    # Open store for reading
+    iter(store)
 
     # Iterate by organiser
     for organiser in organisers:
@@ -1541,7 +1542,7 @@ def load_matches(dsn, schema, **kwargs):
     loader.start()
 
     con = Connection(dsn)
-    with io.Store(dir=tmpdir, mode="wb") as store:
+    with io.Store(dir=tmpdir) as store:
         logging.info("dumping proteins")
         chunks = dump_proteins(con, schema, store)
         logging.info("{}: {}".format(store.path, os.path.getsize(store.path)))

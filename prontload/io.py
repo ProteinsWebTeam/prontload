@@ -111,17 +111,12 @@ class Organiser(object):
 
 
 class Store(object):
-    def __init__(self, path=None, dir=None, mode="rb"):
-        if path:
-            self.path = path
-            self.temporary = False
-        else:
-            fd, self.path = mkstemp(dir=dir)
-            os.close(fd)
-            os.remove(self.path)
-            self.temporary = True
-
-        self.fh = open(self.path, mode)
+    def __init__(self, dir=None, compress=False):
+        fd, self.path = mkstemp(dir=dir)
+        os.close(fd)
+        os.remove(self.path)
+        self.open = gzip.open if compress else open
+        self.fh = self.open(self.path, "wb")
 
     def __enter__(self):
         return self
@@ -143,7 +138,6 @@ class Store(object):
         try:
             obj = pickle.load(self.fh)
         except EOFError:
-            self.close()
             raise StopIteration
         else:
             return obj
@@ -156,7 +150,6 @@ class Store(object):
             return 0
 
     def add(self, obj):
-        # Expects `self.path` to be open for writing
         pickle.dump(obj, self.fh)
 
     def close(self):
@@ -165,6 +158,6 @@ class Store(object):
             self.fh = None
 
     def remove(self):
-        if self.temporary and self.path is not None:
+        if self.path is not None:
             os.remove(self.path)
             self.path = None
