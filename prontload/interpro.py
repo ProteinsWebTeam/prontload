@@ -712,11 +712,9 @@ def dump_proteins(con, schema, store, size=1000000):
     return accessions
 
 
-def _dump_matches(accessions, queue_in, queue_out, tmpdir=None):
-    organiser = io.Organiser(accessions, dir=tmpdir)
-
+def _dump_matches(organiser, in_queue, out_queue):
     while True:
-        chunk = queue_in.get()
+        chunk = in_queue.get()
         if chunk is None:
             break
 
@@ -725,34 +723,29 @@ def _dump_matches(accessions, queue_in, queue_out, tmpdir=None):
 
         organiser.dump()
 
-    size_before, size_after = organiser.merge()
-
-    logging.info("{}: {} bytes (before); {} bytes (after)".format(
-        os.path.basename(organiser.path),
-        size_before,
-        size_after
-    ))
-
-    queue_out.put(organiser.path)
+    size = organiser.merge()
+    queue_out.put(size)
 
 
 def dump_matches(con, schema, chunks, processes, tmpdir=None,
                  buffer_size=1000000):
-    workers = []
-    worker_chunk = []
-    queues_in = []
-    queue_out = Queue(maxsize=processes)
+    organisers = []
     _chunks = []
-    step = int(len(chunks) / processes + 1)  # poor man's ceil :D
+    workers = []
+    workers_chunk = []
+    workers_queues = []
+    out_queue = Queue()
+    step = int(len(chunks) / processes + 1)
     for i in range(0, len(chunks), step):
         _chunks.append(chunks[i])
-        q = Queue(maxsize=1)
+        organiser = io.Organiser(chunks[i:i+step], dir=tmpdir)
+        in_queue = Queue(maxsize=1)
         p = Process(target=_dump_matches,
-                    args=(chunks[i:i+step], q, queue_out, tmpdir))
-        queues_in.append(q)
+                    args=(organiser, in_queue, out_queue))
         workers.append(p)
+        workers_chunk.append([])
+        workers_queues.append(in_queue)
         p.start()
-        worker_chunk.append([])
 
     chunks = _chunks
     buffer_size //= processes
@@ -793,30 +786,27 @@ def dump_matches(con, schema, chunks, processes, tmpdir=None,
         pos_end = int(row[5])
 
         i = bisect.bisect_right(chunks, protein_acc) - 1
-        worker_chunk[i].append((protein_acc, method_acc, method_dbcode,
-                                method_type, pos_start, pos_end))
+        workers_chunk[i].append((protein_acc, method_acc, method_dbcode,
+                                 method_type, pos_start, pos_end))
 
-        if len(worker_chunk[i]) == buffer_size:
-            queues_in[i].put(worker_chunk[i])
-            worker_chunk[i] = []
+        if len(workers_chunk[i]) == buffer_size:
+            workers_queues[i].put(workers_chunk[i])
+            workers_chunk[i] = []
 
         cnt += 1
         if not cnt % 100000000:
             logging.info("{:>12}".format(cnt))
 
-    for q, c in zip(queues_in, worker_chunk):
+    for c, q in zip(workers_chunk, workers_queues):
         q.put(c)
         q.put(None)  # trigger merging
 
-    worker_chunk = None
+    workers_chunk = None
 
-    logging.info("{:>12}".format(cnt))
+    # Output queue contains the temporary space used by each organiser
+    size = sum([out_queue.get() for _ in workers])
 
-    # Output queue contains the path for each Organiser object
-    organisers = [
-        io.Organiser(chunks, path=queue_out.get())
-        for _ in workers
-    ]
+    logging.info("{:>12} (temporary disk space: {} bytes)".format(cnt, size))
 
     # Join processes *after* the output queue is empty (avoid deadlock)
     for w in workers:
@@ -830,18 +820,6 @@ def process_proteins(dsn, con, schema, processes, max_gap, store,
     queue_in = Queue(maxsize=processes)
     queue_out = Queue()
 
-    """
-    Merging proteins:
-
-    We have N organisers, each with the same chunk keys (protein accessions)
-    e.g.:
-        Organiser #1    A   D   G   J ...
-        Organiser #2    A   D   G   J ...
-        ...
-
-    Organiser #1 and #2 may have matches for the same proteins,
-    so we are going to merge chunk by chunk (A, then D, then G, etc.).
-    """
     workers = [
         ProteinConsumer(dsn, schema, max_gap, queue_in, queue_out,
                         dir=tmpdir)
@@ -871,7 +849,7 @@ def process_proteins(dsn, con, schema, processes, max_gap, store,
     chunk = []
     ts = time.time()
 
-    iter(store)  # Prepare store to be iterated
+    iter(store)  # Open store for iterating
 
     # Iterate by organiser
     for organiser in organisers:
@@ -1576,7 +1554,6 @@ def load_matches(dsn, schema, **kwargs):
         organisers = dump_matches(con, schema, chunks, processes, tmpdir)
 
         logging.info("processing proteins")
-        _ = input("press key:")
         res = process_proteins(dsn, con, schema, processes, max_gap,
                                store, organisers, tmpdir)
         signatures, comparisons, name_organisers, taxon_organisers = res
