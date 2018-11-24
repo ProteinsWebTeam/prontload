@@ -15,6 +15,7 @@ class Organiser(object):
             self.path = mkdtemp(dir=dir)
         else:
             self.path = path
+            os.makedirs(self.path, exist_ok=True)
 
         self.buckets = [
             {
