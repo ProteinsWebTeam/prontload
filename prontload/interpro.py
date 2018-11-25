@@ -86,7 +86,9 @@ def load_signatures(dsn, schema):
 
     con.execute(
         """
-        INSERT /*+APPEND*/ INTO {}.METHOD
+        INSERT /*+APPEND*/ INTO {}.METHOD (
+            METHOD_AC, NAME, DBCODE, CANDIDATE, DESCRIPTION, SIG_TYPE
+        )
         SELECT METHOD_AC, NAME, DBCODE, CANDIDATE, DESCRIPTION, SIG_TYPE
         FROM INTERPRO.METHOD
         """.format(schema)
