@@ -1514,7 +1514,7 @@ def update_signatures(con, schema, protein_counts):
             SET PROTEIN_COUNT = :1
             WHERE METHOD_AC = :2
             """.format(schema),
-            (count, method_acc)
+            count, method_acc
         )
 
     con.commit()
