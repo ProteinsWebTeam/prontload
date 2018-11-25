@@ -554,40 +554,6 @@ class ProteinConsumer(Process):
         ).hexdigest()
 
 
-def iter_matches(con, schema, order=True):
-    query = """
-            SELECT
-              MA.PROTEIN_AC,
-              MA.METHOD_AC,
-              MA.MODEL_AC,
-              MA.POS_FROM,
-              MA.POS_TO,
-              MA.FRAGMENTS,
-              MA.DBCODE,
-              ME.SIG_TYPE,
-              P.LEN,
-              P.FRAGMENT,
-              P.DBCODE,
-              PD.DESC_ID,
-              NVL(E.LEFT_NUMBER, 0)
-            FROM INTERPRO.MATCH MA
-              INNER JOIN INTERPRO.METHOD ME
-                ON MA.METHOD_AC = ME.METHOD_AC
-              INNER JOIN INTERPRO.PROTEIN P
-                ON MA.PROTEIN_AC = P.PROTEIN_AC
-              INNER JOIN INTERPRO.ETAXI E
-                ON P.TAX_ID = E.TAX_ID
-              INNER JOIN {}.PROTEIN_DESC PD
-                ON MA.PROTEIN_AC = PD.PROTEIN_AC
-    """.format(schema)
-
-    if order:
-        query += "ORDER BY MA.PROTEIN_AC"
-
-    for row in con.get(query):
-        yield row
-
-
 def insert_matches(dsn, schema, queue):
     con = Connection(dsn)
 
@@ -621,7 +587,8 @@ def insert_matches(dsn, schema, queue):
           METHOD_AC,
           DBCODE,
           CASE
-            WHEN MODEL_AC IS NOT NULL AND MODEL_AC != METHOD_AC THEN MODEL_AC
+            WHEN MODEL_AC IS NOT NULL AND MODEL_AC != METHOD_AC
+            THEN MODEL_AC
             ELSE NULL
           END AS MODEL_AC,
           POS_FROM,
