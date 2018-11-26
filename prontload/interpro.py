@@ -343,20 +343,23 @@ class ProteinConsumer(Process):
                 break
 
             data = []
-            for protein_ac, dbcode, length, desc_id, left_num, matches in chunk:
+            for args in chunk:
+                protein_acc, dbcode, length, desc_id, left_num, matches = args
+
                 md5 = self.hash(matches, self.max_gap)
                 _signatures, _comparisons = self.compare(matches)
+                # _residues, _overlaps = self.compare_fragments(matches)
 
                 ranks = left_numbers.get(left_num, {"no rank": -1})
 
-                for method_ac in _signatures:
+                for method_acc in _signatures:
                     data.append((
-                        method_ac, protein_ac, dbcode,
+                        method_acc, protein_acc, dbcode,
                         md5, length, left_num, desc_id
                     ))
 
-                    if method_ac not in signatures:
-                        signatures[method_ac] = {
+                    if method_acc not in signatures:
+                        signatures[method_acc] = {
                             "proteins": 0,
                             "matches": 0
                         }
@@ -366,10 +369,10 @@ class ProteinConsumer(Process):
 
                     # Taxonomic origins
                     for rank, tax_id in ranks.items():
-                        organiser_taxa.add(method_ac, (rank, tax_id))
+                        organiser_taxa.add(method_acc, (rank, tax_id))
 
                     # UniProt descriptions
-                    organiser_names.add(method_ac, (desc_id, dbcode))
+                    organiser_names.add(method_acc, (desc_id, dbcode))
 
                 # _comparisons: match overlaps between signatures
                 for acc_1 in _comparisons:
@@ -451,7 +454,9 @@ class ProteinConsumer(Process):
     def compare(matches):
         comparisons = {}
         signatures = {}
-        for m1_acc, m1_start, m1_end in matches:
+
+        # Fourth item is fragments_str, which is not used here
+        for m1_acc, m1_start, m1_end, _ in matches:
             m1_len = m1_end - m1_start + 1
 
             if m1_acc in signatures:
@@ -461,7 +466,7 @@ class ProteinConsumer(Process):
                 signatures[m1_acc] = 1
                 m1 = comparisons[m1_acc] = {}
 
-            for m2_acc, m2_start, m2_end in matches:
+            for m2_acc, m2_start, m2_end, _ in matches:
                 if m1_acc > m2_acc:
                     continue
                 elif m2_acc in m1:
@@ -494,7 +499,8 @@ class ProteinConsumer(Process):
         # flatten matches
         locations = []
 
-        for method_ac, pos_start, pos_end in matches:
+        # Fourth item is fragments_str, which is not used here
+        for method_ac, pos_start, pos_end, _ in matches:
             locations.append((pos_start, method_ac))
             locations.append((pos_end, method_ac))
 
@@ -552,6 +558,75 @@ class ProteinConsumer(Process):
         return hashlib.md5(
             '/'.join(structure).encode("utf-8")
         ).hexdigest()
+
+    @staticmethod
+    def compare_fragments(matches):
+        # Parse the fragments string
+        fragments = []
+        for method_acc, start, end, fragments_str in matches:
+            if fragments_str is None:
+                fragments.append(method_acc, start, end)
+            else:
+                # Discontinuous domains
+                fallback = True
+                for frag in fragments_str.split(','):
+                    """
+                    Format: START-END-TYPE
+                    Types:
+                        * S: Continuous single chain domain
+                        * N: N-terminal discontinuous
+                        * C: C-terminal discontinuous
+                        * NC: N and C -terminal discontinuous
+                    """
+                    pos_start, pos_end, t = frag.split('-')
+                    pos_start = int(pos_start)
+                    pos_end = int(pos_end)
+                    if pos_start < pos_end:
+                        # At least one well formated discontinuous domain
+                        fallback = False
+                        fragments.append(method_acc, pos_start, pos_end)
+
+                if fallback:
+                    # Fallback to match start/end positions
+                    fragments.append(method_acc, start, end)
+
+        # Sort by positions
+        fragments.sort(key=lambda x: (x[1], x[2]))
+
+        # Group sorted fragments by signature
+        signatures = {}
+        for method_acc, start, end in fragments:
+            if method_acc in signatures:
+                signatures[method_acc].append((start, end))
+            else:
+                signatures[method_acc] = [(start, end)]
+
+        residues = {}
+        overlaps = {}
+        for acc_1 in signatures:
+            residues[acc_1] = sum([end - start + 1
+                                  for start, end in signatures[acc_1]])
+            overlaps[acc_1] = {}
+
+            for acc_2 in signatures:
+                if acc_1 < acc_2:
+                    overlaps[acc_1][acc_2] = 0
+
+                    i = 0
+                    start_2, end_2 = signatures[acc_2][i]
+                    for start_1, end_1 in signatures[acc_1]:
+                        while end_2 < start_1:
+                            i += 1
+                            try:
+                                start_2, end_2 = signatures[acc_2][i]
+                            except IndexError:
+                                break
+
+                        o = min(end_1, end_2) - max(start_1, start_2) + 1
+                        if o > 0:
+                            overlaps[acc_1][acc_2] += o
+
+        return residues, overlaps
 
 
 def insert_matches(dsn, schema, queue):
@@ -724,7 +799,8 @@ def dump_matches(con, schema, chunks, processes, tmpdir=None,
               MA.DBCODE,
               ME.SIG_TYPE,
               MA.POS_FROM,
-              MA.POS_TO
+              MA.POS_TO,
+              MA.FRAGMENTS
             FROM INTERPRO.MATCH MA
               INNER JOIN {0}.METHOD ME
                 ON MA.METHOD_AC = ME.METHOD_AC
@@ -745,10 +821,12 @@ def dump_matches(con, schema, chunks, processes, tmpdir=None,
         method_type = row[3]
         pos_start = int(row[4])
         pos_end = int(row[5])
+        fragments_str = row[6]
 
         i = bisect.bisect_right(chunks, protein_acc) - 1
         workers_chunk[i].append((protein_acc, method_acc, method_dbcode,
-                                 method_type, pos_start, pos_end))
+                                 method_type, pos_start, pos_end,
+                                 fragments_str))
 
         if len(workers_chunk[i]) == buffer_size:
             workers_queues[i].put(workers_chunk[i])
@@ -830,10 +908,11 @@ def process_proteins(dsn, con, schema, processes, max_gap, store,
                     continue
 
                 methods = {}
+                methods_fragments_str = {}
                 matches = []
                 for m in proteins[protein_acc]:
                     (method_acc, method_dbcode, method_type,
-                     pos_start, pos_end) = m
+                     pos_start, pos_end, fragments_str) = m
 
                     if method_dbcode in ('F', 'V'):
                         """
@@ -846,6 +925,8 @@ def process_proteins(dsn, con, schema, processes, max_gap, store,
                                 almost all PRINTS signatures
                         """
                         if method_acc not in methods:
+                            methods_fragments_str[method_acc] = fragments_str
+
                             if method_type == 'F':
                                 # Families: use the entire protein sequence
                                 methods[method_acc] = [(1, length)]
@@ -856,7 +937,8 @@ def process_proteins(dsn, con, schema, processes, max_gap, store,
                             # (because families use the entire protein)
                             methods[method_acc].append((pos_start, pos_end))
                     else:
-                        matches.append((method_acc, pos_start, pos_end))
+                        matches.append((method_acc, pos_start, pos_end,
+                                        fragments_str))
 
                 # Merge matches
                 for method_acc in methods:
@@ -869,7 +951,8 @@ def process_proteins(dsn, con, schema, processes, max_gap, store,
                         if max_pos is None or pos_end > max_pos:
                             max_pos = pos_end
 
-                    matches.append((method_acc, min_pos, max_pos))
+                    matches.append((method_acc, min_pos, max_pos,
+                                    methods_fragments_str[method_acc]))
 
                 chunk.append((protein_acc, prot_dbcode, length, desc_id,
                               left_num, matches))
