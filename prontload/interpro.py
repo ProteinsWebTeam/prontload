@@ -389,22 +389,22 @@ class ProteinConsumer(Process):
                             comp = d[acc_2] = {
                                 # num of proteins in which both sign. occur
                                 # (not necessarily overlapping)
-                                'prot': 0,
+                                "prot": 0,
                                 # num of proteins in which signatures overlap
-                                'prot_over': 0,
+                                "prot_over": 0,
                                 # num of times signatures overlap
                                 # (>= prot_over)
-                                'over': 0,
+                                "over": 0,
                                 # sum of overlap lengths
                                 # (to compute the average length later)
-                                'length': 0,
+                                "length": 0,
                                 # sum of fractions of matches overlapping
                                 # (overlap length / match length)
-                                'frac_1': 0,
-                                'frac_2': 0
+                                "frac_1": 0,
+                                "frac_2": 0
                             }
 
-                        comp['prot'] += 1
+                        comp["prot"] += 1
                         prot_over = False
                         for l1, l2, o in _comparisons[acc_1][acc_2]:
                             if o > (min(l1, l2) / 2):
@@ -413,14 +413,14 @@ class ProteinConsumer(Process):
                                 if the overlap is longer
                                 than the half of the shortest match
                                 """
-                                comp['frac_1'] += o / l1
-                                comp['frac_2'] += o / l2
-                                comp['over'] += 1
-                                comp['length'] += o
+                                comp["frac_1"] += o / l1
+                                comp["frac_2"] += o / l2
+                                comp["over"] += 1
+                                comp["length"] += o
                                 prot_over = True
 
                         if prot_over:
-                            comp['prot_over'] += 1
+                            comp["prot_over"] += 1
 
             for i in range(0, len(data), BULK_INSERT_SIZE):
                 con.executemany(
@@ -974,14 +974,14 @@ def make_predictions(con, schema, signatures, comparisons):
             s_2 = signatures[acc_2]
             c = comparisons[acc_1][acc_2]
 
-            if (c['prot_over'] >= s_1['proteins'] * 0.4
-                    or c['prot_over'] >= s_2['proteins'] * 0.4):
+            if (c["prot_over"] >= s_1["proteins"] * 0.4
+                    or c["prot_over"] >= s_2["proteins"] * 0.4):
                 # is a relation
                 if acc_1 in relations:
                     relations[acc_1].append(acc_2)
                 else:
                     relations[acc_1] = [acc_2]
-            elif c['prot'] >= s_1['proteins'] * 0.1:
+            elif c["prot"] >= s_1["proteins"] * 0.1:
                 # is adjacent
                 if acc_1 in adjacents:
                     adjacents[acc_1].append(acc_2)
@@ -989,14 +989,14 @@ def make_predictions(con, schema, signatures, comparisons):
                     adjacents[acc_1] = [acc_2]
 
             if acc_1 != acc_2:
-                if (c['prot_over'] >= s_1['proteins'] * 0.4
-                        or c['prot_over'] >= s_2['proteins'] * 0.4):
+                if (c["prot_over"] >= s_1["proteins"] * 0.4
+                        or c["prot_over"] >= s_2["proteins"] * 0.4):
                     # is a relation
                     if acc_2 in relations:
                         relations[acc_2].append(acc_1)
                     else:
                         relations[acc_2] = [acc_1]
-                elif c['prot'] >= s_2['proteins'] * 0.1:
+                elif c["prot"] >= s_2["proteins"] * 0.1:
                     # is adjacent
                     if acc_2 in adjacents:
                         adjacents[acc_2].append(acc_1)
@@ -1053,8 +1053,8 @@ def make_predictions(con, schema, signatures, comparisons):
             c = comparisons[acc_1][acc_2]
             s_2 = signatures[acc_2]
 
-            if (c['prot_over'] >= s_1['proteins'] * 0.4
-                    or c['prot_over'] >= s_2['proteins'] * 0.4):
+            if (c["prot_over"] >= s_1["proteins"] * 0.4
+                    or c["prot_over"] >= s_2["proteins"] * 0.4):
                 extra_1 = extra_relations.get(acc_1, {}).get(acc_2, 0)
                 extra_2 = extra_relations.get(acc_2, {}).get(acc_1, 0)
 
@@ -1066,7 +1066,7 @@ def make_predictions(con, schema, signatures, comparisons):
                 adj_1 = adj_relations.get(acc_2, {}).get(acc_1, 0)
                 adj_2 = adj_relations.get(acc_1, {}).get(acc_2, 0)
 
-                if c['over']:
+                if c["over"]:
                     """
                     frac_1 and frac_2 are the sum of ratios
                     (overlap / match length).
@@ -1087,8 +1087,8 @@ def make_predictions(con, schema, signatures, comparisons):
                         so B < A (because B ~ overlap and A >= overlap)
                         so B CONTAINED_BY A
                     """
-                    len_1 = c['frac_1'] / c['over']
-                    len_2 = c['frac_2'] / c['over']
+                    len_1 = c["frac_1"] / c["over"]
+                    len_2 = c["frac_2"] / c["over"]
                 else:
                     len_1 = len_2 = 0
 
@@ -1102,48 +1102,48 @@ def make_predictions(con, schema, signatures, comparisons):
                         A is a CHILD_OF B
                 """
                 over_1 = min(
-                    c['over'] / s_1['matches'],
-                    c['prot_over'] / s_1['proteins']
+                    c["over"] / s_1["matches"],
+                    c["prot_over"] / s_1["proteins"]
                 )
                 over_2 = min(
-                    c['over'] / s_2['matches'],
-                    c['prot_over'] / s_2['proteins']
+                    c["over"] / s_2["matches"],
+                    c["prot_over"] / s_2["proteins"]
                 )
                 if len_1 >= 0.5 and len_2 >= 0.5:
                     if (over_1 > 0.75 and over_2 >= 0.75 and
                             not extra_1 and not extra_2):
-                        prediction = 'ADD_TO'
+                        prediction = "ADD_TO"
                     elif over_1 > 0.75 and not extra_1 and not adj_1:
-                        prediction = 'CHILD_OF'
+                        prediction = "CHILD_OF"
                     elif over_2 > 0.75 and not extra_2 and not adj_2:
-                        prediction = 'PARENT_OF'  # acc2 child of acc1
+                        prediction = "PARENT_OF"  # acc2 child of acc1
                     elif len_1 >= 0.9:
                         if len_2 >= 0.9:
-                            prediction = 'C/C'
+                            prediction = "C/C"
                         else:
-                            prediction = 'CONTAINED_BY'
+                            prediction = "CONTAINED_BY"
                     elif len_2 >= 0.9:
-                        prediction = 'CONTAINER_OF'
+                        prediction = "CONTAINER_OF"
                     else:
-                        prediction = 'OVERLAPS'
+                        prediction = "OVERLAPS"
                 elif len_1 >= 0.9:
-                    prediction = 'CONTAINED_BY'
+                    prediction = "CONTAINED_BY"
                 elif len_2 >= 0.9:
-                    prediction = 'CONTAINER_OF'
+                    prediction = "CONTAINER_OF"
                 else:
-                    prediction = 'OVERLAPS'
+                    prediction = "OVERLAPS"
 
                 predictions.append((acc_1, acc_2, prediction))
 
                 # switch (acc_1, acc_2) -> (acc_2, acc_1)
-                if prediction == 'CHILD_OF':
-                    prediction = 'PARENT_OF'
-                elif prediction == 'PARENT_OF':
-                    prediction = 'CHILD_OF'
-                elif prediction == 'CONTAINED_BY':
-                    prediction = 'CONTAINER_OF'
-                elif prediction == 'CONTAINER_OF':
-                    prediction = 'CONTAINED_BY'
+                if prediction == "CHILD_OF":
+                    prediction = "PARENT_OF"
+                elif prediction == "PARENT_OF":
+                    prediction = "CHILD_OF"
+                elif prediction == "CONTAINED_BY":
+                    prediction = "CONTAINER_OF"
+                elif prediction == "CONTAINER_OF":
+                    prediction = "CONTAINED_BY"
                 predictions.append((acc_2, acc_1, prediction))
 
     # Populating METHOD_PREDICTION
@@ -1195,7 +1195,7 @@ def make_predictions(con, schema, signatures, comparisons):
     )
 
     signatures = [
-        (acc, s['matches'], s['proteins'])
+        (acc, s["matches"], s["proteins"])
         for acc, s in signatures.items()
     ]
     for i in range(0, len(signatures), BULK_INSERT_SIZE):
@@ -1244,10 +1244,10 @@ def make_predictions(con, schema, signatures, comparisons):
         for acc_2 in comparisons[acc_1]:
             c = comparisons[acc_1][acc_2]
 
-            if c['over']:
-                avg_frac1 = 100 * c['frac_1'] / c['over']
-                avg_frac2 = 100 * c['frac_2'] / c['over']
-                avg_over = c['length'] / c['over']
+            if c["over"]:
+                avg_frac1 = 100 * c["frac_1"] / c["over"]
+                avg_frac2 = 100 * c["frac_2"] / c["over"]
+                avg_over = c["length"] / c["over"]
             else:
                 avg_frac1 = avg_frac2 = avg_over = 0
 
@@ -1259,13 +1259,13 @@ def make_predictions(con, schema, signatures, comparisons):
             and the value for the second is not (e.g. AVG_OVER=25.6)
             """
             overlaps.append((
-                acc_1, acc_2, c['prot'], c['over'], c['prot_over'],
+                acc_1, acc_2, c["prot"], c["over"], c["prot_over"],
                 float(avg_over), float(avg_frac1), float(avg_frac2)
             ))
 
             if acc_1 != acc_2:
                 overlaps.append((
-                    acc_2, acc_1, c['prot'], c['over'], c['prot_over'],
+                    acc_2, acc_1, c["prot"], c["over"], c["prot_over"],
                     float(avg_over), float(avg_frac2), float(avg_frac1)
                 ))
 
