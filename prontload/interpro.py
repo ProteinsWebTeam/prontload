@@ -3,6 +3,7 @@
 
 import bisect
 import hashlib
+import heapq
 import logging
 import os
 import time
@@ -893,81 +894,79 @@ def process_proteins(dsn, con, schema, processes, max_gap, store,
 
     # Iterate by organiser
     for organiser in organisers:
-        # Iterate by the organiser's buckets
-        for proteins in organiser:
-            # Iterate by *sorted* protein (as the store is ordered)
-            for protein_acc in sorted(proteins):
-                # Read store until we find the current protein
+        # Iterate by the organiser's items
+        for protein_acc, matches in organiser:
+            # Read store until we find the current protein
+            acc, length, prot_dbcode, desc_id, left_num = next(store)
+            while acc < protein_acc:
                 acc, length, prot_dbcode, desc_id, left_num = next(store)
-                while acc < protein_acc:
-                    acc, length, prot_dbcode, desc_id, left_num = next(store)
 
-                if acc != protein_acc:
-                    # Protein missing from store
-                    logging.error("{}: invalid protein".format(acc))
-                    continue
+            if acc != protein_acc:
+                # Protein missing from store
+                logging.error("{}: invalid protein".format(acc))
+                continue
 
-                methods = {}
-                methods_fragments_str = {}
-                matches = []
-                for m in proteins[protein_acc]:
-                    (method_acc, method_dbcode, method_type,
-                     pos_start, pos_end, fragments_str) = m
+            methods = {}
+            methods_fragments_str = {}
+            _matches = []
+            for match in matches:
+                (method_acc, method_dbcode, method_type,
+                 pos_start, pos_end, fragments_str) = match
 
-                    if method_dbcode in ('F', 'V'):
-                        """
-                        PANTHER & PRINTS:
-                            Merge protein matches.
-                            If the signature is a family*,
-                                use the entire protein.
+                if method_dbcode in ('F', 'V'):
+                    """
+                    PANTHER & PRINTS:
+                        Merge protein matches.
+                        If the signature is a family*,
+                            use the entire protein.
 
-                            * all PANTHER signatures,
-                                almost all PRINTS signatures
-                        """
-                        if method_acc not in methods:
-                            methods_fragments_str[method_acc] = fragments_str
+                        * all PANTHER signatures,
+                            almost all PRINTS signatures
+                    """
+                    if method_acc not in methods:
+                        methods_fragments_str[method_acc] = fragments_str
 
-                            if method_type == 'F':
-                                # Families: use the entire protein sequence
-                                methods[method_acc] = [(1, length)]
-                            else:
-                                methods[method_acc] = [(pos_start, pos_end)]
-                        elif method_type != 'F':
-                            # Only for non-families
-                            # (because families use the entire protein)
-                            methods[method_acc].append((pos_start, pos_end))
-                    else:
-                        matches.append((method_acc, pos_start, pos_end,
-                                        fragments_str))
+                        if method_type == 'F':
+                            # Families: use the entire protein sequence
+                            methods[method_acc] = [(1, length)]
+                        else:
+                            methods[method_acc] = [(pos_start, pos_end)]
+                    elif method_type != 'F':
+                        # Only for non-families
+                        # (because families use the entire protein)
+                        methods[method_acc].append((pos_start, pos_end))
+                else:
+                    _matches.append((method_acc, pos_start, pos_end,
+                                     fragments_str))
 
-                # Merge matches
-                for method_acc in methods:
-                    min_pos = None
-                    max_pos = None
+            # Merge matches
+            for method_acc in methods:
+                min_pos = None
+                max_pos = None
 
-                    for pos_start, pos_end in methods[method_acc]:
-                        if min_pos is None or pos_start < min_pos:
-                            min_pos = pos_start
-                        if max_pos is None or pos_end > max_pos:
-                            max_pos = pos_end
+                for pos_start, pos_end in methods[method_acc]:
+                    if min_pos is None or pos_start < min_pos:
+                        min_pos = pos_start
+                    if max_pos is None or pos_end > max_pos:
+                        max_pos = pos_end
 
-                    matches.append((method_acc, min_pos, max_pos,
-                                    methods_fragments_str[method_acc]))
+                _matches.append((method_acc, min_pos, max_pos,
+                                 methods_fragments_str[method_acc]))
 
-                chunk.append((protein_acc, prot_dbcode, length, desc_id,
-                              left_num, matches))
+            chunk.append((protein_acc, prot_dbcode, length, desc_id,
+                          left_num, _matches))
 
-                if len(chunk) == chunk_size:
-                    # Enqueue chunk of proteins for ProteinConsumers
-                    queue_in.put(chunk)
-                    chunk = []
+            if len(chunk) == chunk_size:
+                # Enqueue chunk of proteins for ProteinConsumers
+                queue_in.put(chunk)
+                chunk = []
 
-                cnt += 1
-                if not cnt % 1000000:
-                    logging.info("{:>12} ({:.0f} proteins/sec)".format(
-                        cnt,
-                        cnt / (time.time() - ts)
-                    ))
+            cnt += 1
+            if not cnt % 1000000:
+                logging.info("{:>12} ({:.0f} proteins/sec)".format(
+                    cnt,
+                    cnt / (time.time() - ts)
+                ))
 
     if chunk:
         queue_in.put(chunk)
@@ -1407,20 +1406,6 @@ def optimize_method2protein(con, schema):
     con.grant("SELECT", schema, "METHOD2PROTEIN", "INTERPRO_SELECT")
 
 
-def aggregate_descriptions(src, dst):
-    for method_acc, descriptions in src.items():
-        if method_acc in dst:
-            s = dst[method_acc]
-        else:
-            s = dst[method_acc] = {}
-
-        for desc_id, dbcode in descriptions:
-            if desc_id not in s:
-                s[desc_id] = {'S': 0, 'T': 0}
-
-            s[desc_id][dbcode] += 1
-
-
 def load_description_counts(con, schema, organisers):
     con.drop_table(schema, "METHOD_DESC")
     con.execute(
@@ -1436,10 +1421,17 @@ def load_description_counts(con, schema, organisers):
     )
 
     signatures = {}
-    n = organisers[0].size
-    for _ in range(n):
-        for organiser in organisers:
-            aggregate_descriptions(next(organiser), signatures)
+    for acc, descriptions in heapq.merge(*organisers, key=lambda x: x[0]):
+        if acc in signatures:
+            s = signatures[acc]
+        else:
+            s = signatures[acc] = {}
+
+        for desc_id, dbcode in descriptions:
+            if desc_id not in s:
+                s[desc_id] = {'S': 0, 'T': 0}
+
+            s[desc_id][dbcode] += 1
 
     data = []
     for method_acc, descriptions in signatures.items():
@@ -1480,25 +1472,6 @@ def load_description_counts(con, schema, organisers):
     con.grant("SELECT", schema, "METHOD_DESC", "INTERPRO_SELECT")
 
 
-def aggregate_taxa(src, dst):
-    for method_acc, taxa in src.items():
-        if method_acc in dst:
-            s = dst[method_acc]
-        else:
-            s = dst[method_acc] = {}
-
-        for rank, tax_id in taxa:
-            if rank in s:
-                r = s[rank]
-            else:
-                r = s[rank] = {}
-
-            if tax_id in r:
-                r[tax_id] += 1
-            else:
-                r[tax_id] = 1
-
-
 def load_taxonomy_counts(con, schema, organisers):
     con.drop_table(schema, "METHOD_TAXA")
     con.execute(
@@ -1514,10 +1487,22 @@ def load_taxonomy_counts(con, schema, organisers):
     )
 
     signatures = {}
-    n = organisers[0].size
-    for _ in range(n):
-        for organiser in organisers:
-            aggregate_taxa(next(organiser), signatures)
+    for acc, taxa in heapq.merge(*organisers, key=lambda x: x[0]):
+        if acc in signatures:
+            s = signatures[acc]
+        else:
+            s = signatures[acc] = {}
+
+        for rank, tax_id in taxa:
+            if rank in s:
+                r = s[rank]
+            else:
+                r = s[rank] = {}
+
+            if tax_id in r:
+                r[tax_id] += 1
+            else:
+                r[tax_id] = 1
 
     data = []
     for method_acc, ranks in signatures.items():
@@ -1602,6 +1587,10 @@ def load_matches(dsn, schema, **kwargs):
         res = process_proteins(dsn, con, schema, processes, max_gap,
                                store, organisers, tmpdir)
         signatures, comparisons, name_organisers, taxon_organisers = res
+
+        # We don't need those any more
+        for o in organisers:
+            o.remove()
 
     # Populating/optimizing overlap/prediction tables
     logging.info("making predictions")

@@ -27,21 +27,17 @@ class Organiser(object):
             }
             for i in range(len(self.keys))
         ]
-        self.index = 0
 
     def __iter__(self):
-        self.index = 0
-        return self
-
-    def __next__(self):
-        try:
-            b = self.buckets[self.index]
-        except IndexError:
-            raise StopIteration
-        else:
-            self.index += 1
+        for b in self.buckets:
             with self.open(b["path"], "rb") as fh:
-                return pickle.load(fh)
+                while True:
+                    try:
+                        k, v = pickle.load(fh)
+                    except EOFError:
+                        break
+                    else:
+                        yield k, v 
 
     @property
     def size(self):
@@ -87,7 +83,8 @@ class Organiser(object):
                                     data[key] = value
 
             with self.open(b["path"], "wb") as fh:
-                pickle.dump(data, fh)
+                for key in sorted(data):
+                    pickle.dump((key, data[key]), fh)
 
             size_after += os.path.getsize(b["path"])
 
