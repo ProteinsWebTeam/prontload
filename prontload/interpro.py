@@ -302,22 +302,22 @@ def chunk_signatures(con, schema, size=1000):
 
 
 class ProteinConsumer(Process):
-    def __init__(self, dsn, schema, max_gap, queue_in, queue_out, **kwargs):
+    def __init__(self, dsn, schema, max_gap, queue_in, queue_out, dir=None):
         super().__init__()
         self.dsn = dsn
         self.schema = schema
         self.max_gap = max_gap
         self.queue_in = queue_in
         self.queue_out = queue_out
-        self.tmpdir = kwargs.get("dir")
+        self.dir = dir
 
     def run(self):
         con = Connection(self.dsn)
 
         # Get signatures
         accessions = chunk_signatures(con, self.schema)
-        organiser_names = io.Organiser(accessions, dir=self.tmpdir)
-        organiser_taxa = io.Organiser(accessions, dir=self.tmpdir)
+        organiser_names = io.Organiser(accessions, dir=self.dir)
+        organiser_taxa = io.Organiser(accessions, dir=self.dir)
 
         # Get lineages for the METHOD_TAXA table
         ranks = {
@@ -325,11 +325,12 @@ class ProteinConsumer(Process):
             "family", "genus", "species"
         }
         left_numbers = {}
-        query = """
+        for rank, left_num, tax_id in con.get(
+            """
             SELECT RANK, LEFT_NUMBER, TAX_ID
             FROM {}.LINEAGE
-        """.format(self.schema)
-        for rank, left_num, tax_id in con.get(query):
+            """.format(self.schema)
+        ):
             if rank not in ranks:
                 continue
             elif left_num not in left_numbers:
@@ -389,22 +390,22 @@ class ProteinConsumer(Process):
                             comp = d[acc_2] = {
                                 # num of proteins in which both sign. occur
                                 # (not necessarily overlapping)
-                                'prot': 0,
+                                "prot": 0,
                                 # num of proteins in which signatures overlap
-                                'prot_over': 0,
+                                "prot_over": 0,
                                 # num of times signatures overlap
                                 # (>= prot_over)
-                                'over': 0,
+                                "over": 0,
                                 # sum of overlap lengths
                                 # (to compute the average length later)
-                                'length': 0,
+                                "length": 0,
                                 # sum of fractions of matches overlapping
                                 # (overlap length / match length)
-                                'frac_1': 0,
-                                'frac_2': 0
+                                "frac_1": 0,
+                                "frac_2": 0
                             }
 
-                        comp['prot'] += 1
+                        comp["prot"] += 1
                         prot_over = False
                         for l1, l2, o in _comparisons[acc_1][acc_2]:
                             if o > (min(l1, l2) / 2):
@@ -413,14 +414,14 @@ class ProteinConsumer(Process):
                                 if the overlap is longer
                                 than the half of the shortest match
                                 """
-                                comp['frac_1'] += o / l1
-                                comp['frac_2'] += o / l2
-                                comp['over'] += 1
-                                comp['length'] += o
+                                comp["frac_1"] += o / l1
+                                comp["frac_2"] += o / l2
+                                comp["over"] += 1
+                                comp["length"] += o
                                 prot_over = True
 
                         if prot_over:
-                            comp['prot_over'] += 1
+                            comp["prot_over"] += 1
 
             for i in range(0, len(data), BULK_INSERT_SIZE):
                 con.executemany(
@@ -723,9 +724,9 @@ def insert_matches(dsn, schema, queue):
     queue.put(methods)
 
 
-def dump_proteins(con, schema, store, size=1000000):
+def dump_proteins(con, schema, store, bucket_size=1000000):
     accessions = []
-    cnt = size
+    cnt = bucket_size
     for row in con.get(
             """
             SELECT
@@ -740,7 +741,7 @@ def dump_proteins(con, schema, store, size=1000000):
             """.format(schema)
     ):
         store.add(row)
-        if cnt == size:
+        if cnt == bucket_size:
             accessions.append(row[0])
             cnt = 1
         else:
@@ -749,9 +750,9 @@ def dump_proteins(con, schema, store, size=1000000):
     return accessions
 
 
-def _dump_matches(organiser, in_queue, out_queue):
+def _dump_matches(organiser, queue):
     while True:
-        chunk = in_queue.get()
+        chunk = queue.get()
         if chunk is None:
             break
 
@@ -761,32 +762,26 @@ def _dump_matches(organiser, in_queue, out_queue):
         organiser.dump()
 
     size = organiser.merge()
-    out_queue.put(size)
+    queue.put(size)
 
 
-def dump_matches(con, schema, chunks, processes, tmpdir=None,
-                 buffer_size=1000000):
-    organisers = []
-    _chunks = []
+def dump_matches(con, schema, organisers, buffer_size=1000000):
+    queues = []
     workers = []
     workers_chunk = []
-    workers_queues = []
-    out_queue = Queue()
-    step = int(len(chunks) / processes + 1)
-    for i in range(0, len(chunks), step):
-        _chunks.append(chunks[i])
-        organiser = io.Organiser(chunks[i:i+step], dir=tmpdir)
-        in_queue = Queue(maxsize=1)
-        p = Process(target=_dump_matches,
-                    args=(organiser, in_queue, out_queue))
-        workers.append(p)
+    chunks = []
+    for organiser in organisers:
+        q = Queue(maxsize=1)
+        queues.append(q)
+
+        w = Process(target=_dump_matches, args=(organiser, q))
+        w.start()
+        workers.append(w)
         workers_chunk.append([])
-        workers_queues.append(in_queue)
-        p.start()
 
-    chunks = _chunks
-    buffer_size //= processes
+        chunks.append(organiser.keys[0])
 
+    buffer_size //= len(organisers)
     cnt = 0
     """
     JOIN ETAXI and PROTEIN_DESC to be sure to dump *only* matches
@@ -824,66 +819,70 @@ def dump_matches(con, schema, chunks, processes, tmpdir=None,
         pos_end = int(row[5])
         fragments_str = row[6]
 
-        i = bisect.bisect_right(chunks, protein_acc) - 1
-        workers_chunk[i].append((protein_acc, method_acc, method_dbcode,
-                                 method_type, pos_start, pos_end,
-                                 fragments_str))
+        if fragments_str is None:
+            fragments = [(pos_start, pos_end)]
+        else:
+            fragments = []
+            for frag in fragments_str.split(','):
+                """
+                Format: START-END-TYPE
+                Types:
+                    * S: Continuous single chain domain
+                    * N: N-terminal discontinuous
+                    * C: C-terminal discontinuous
+                    * NC: N and C -terminal discontinuous
+                """
+                s, e, t = frag.split('-')
+                s = int(s)
+                e = int(e)
+                if s < e:
+                    fragments.append((s, e))
 
+            if not fragments:
+                fragments = [(pos_start, pos_end)]
+
+        # Find worker feeding the organiser of this protein
+        i = bisect.bisect_right(chunks, protein_acc) - 1
+
+
+        workers_chunk[i].append((protein_acc, method_acc, method_dbcode,
+                                 method_type, pos_start, pos_end, fragments))
+
+        # Send items to child process
         if len(workers_chunk[i]) == buffer_size:
-            workers_queues[i].put(workers_chunk[i])
+            queues[i].put(workers_chunk[i])
             workers_chunk[i] = []
 
         cnt += 1
         if not cnt % 100000000:
             logging.info("{:>12}".format(cnt))
 
-    for c, q in zip(workers_chunk, workers_queues):
+    # Trigger merging (in child processes)
+    for c, q in zip(workers_chunk, queues):
         q.put(c)
-        q.put(None)  # trigger merging
+        q.put(None)
 
-    workers_chunk = None
-
-    # Output queue contains the temporary space used by each organiser
-    size = sum([out_queue.get() for _ in workers])
-
-    logging.info("{:>12} (temporary disk space: {} bytes)".format(cnt, size))
+    # Get temporary space used by each organiser
+    size = sum([q.get() for q in queues])
 
     # Join processes *after* the output queue is empty (avoid deadlock)
     for w in workers:
         w.join()
 
-    return organisers
+    logging.info("{:>12} (temporary disk space: {} bytes)".format(cnt, size))
 
 
-def process_proteins(dsn, con, schema, processes, max_gap, store,
-                     organisers, tmpdir=None, chunk_size=10000):
-    queue_in = Queue(maxsize=processes)
+def process_proteins(dsn, schema, organisers, store, max_gap,
+                     chunk_size=10000, tmpdir=None):
+    queue_in = Queue(maxsize=len(organisers))
     queue_out = Queue()
 
-    workers = [
-        ProteinConsumer(dsn, schema, max_gap, queue_in, queue_out,
-                        dir=tmpdir)
-        for _ in range(processes)
-    ]
-
-    for w in workers:
+    workers = []
+    for _ in organisers:
+        w = ProteinConsumer(dsn, schema, max_gap, queue_in, queue_out,
+                            dir=tmpdir)
         w.start()
-
-    con.drop_table(schema, "METHOD2PROTEIN")
-    con.execute(
-        """
-        CREATE TABLE {}.METHOD2PROTEIN
-        (
-            METHOD_AC VARCHAR2(25) NOT NULL,
-            PROTEIN_AC VARCHAR2(15) NOT NULL,
-            DBCODE CHAR(1) NOT NULL,
-            MD5 VARCHAR(32) NOT NULL,
-            LEN NUMBER(5) NOT NULL,
-            LEFT_NUMBER NUMBER NOT NULL,
-            DESC_ID NUMBER(10) NOT NULL
-        ) NOLOGGING
-        """.format(schema)
-    )
+        workers.append(w)
 
     cnt = 0
     chunk = []
@@ -903,15 +902,14 @@ def process_proteins(dsn, con, schema, processes, max_gap, store,
 
             if acc != protein_acc:
                 # Protein missing from store
-                logging.error("{}: invalid protein".format(acc))
-                continue
+                raise KeyError("{}: missing protein".format(protein_acc))
 
-            methods = {}
-            methods_fragments_str = {}
             _matches = []
-            for match in matches:
+            methods = {}
+            methods_fragments = {}
+            for m in proteins[protein_acc]:
                 (method_acc, method_dbcode, method_type,
-                 pos_start, pos_end, fragments_str) = match
+                 pos_start, pos_end, fragments) = m
 
                 if method_dbcode in ('F', 'V'):
                     """
@@ -1044,14 +1042,14 @@ def make_predictions(con, schema, signatures, comparisons):
             s_2 = signatures[acc_2]
             c = comparisons[acc_1][acc_2]
 
-            if (c['prot_over'] >= s_1['proteins'] * 0.4
-                    or c['prot_over'] >= s_2['proteins'] * 0.4):
+            if (c["prot_over"] >= s_1["proteins"] * 0.4
+                    or c["prot_over"] >= s_2["proteins"] * 0.4):
                 # is a relation
                 if acc_1 in relations:
                     relations[acc_1].append(acc_2)
                 else:
                     relations[acc_1] = [acc_2]
-            elif c['prot'] >= s_1['proteins'] * 0.1:
+            elif c["prot"] >= s_1["proteins"] * 0.1:
                 # is adjacent
                 if acc_1 in adjacents:
                     adjacents[acc_1].append(acc_2)
@@ -1059,14 +1057,14 @@ def make_predictions(con, schema, signatures, comparisons):
                     adjacents[acc_1] = [acc_2]
 
             if acc_1 != acc_2:
-                if (c['prot_over'] >= s_1['proteins'] * 0.4
-                        or c['prot_over'] >= s_2['proteins'] * 0.4):
+                if (c["prot_over"] >= s_1["proteins"] * 0.4
+                        or c["prot_over"] >= s_2["proteins"] * 0.4):
                     # is a relation
                     if acc_2 in relations:
                         relations[acc_2].append(acc_1)
                     else:
                         relations[acc_2] = [acc_1]
-                elif c['prot'] >= s_2['proteins'] * 0.1:
+                elif c["prot"] >= s_2["proteins"] * 0.1:
                     # is adjacent
                     if acc_2 in adjacents:
                         adjacents[acc_2].append(acc_1)
@@ -1123,8 +1121,8 @@ def make_predictions(con, schema, signatures, comparisons):
             c = comparisons[acc_1][acc_2]
             s_2 = signatures[acc_2]
 
-            if (c['prot_over'] >= s_1['proteins'] * 0.4
-                    or c['prot_over'] >= s_2['proteins'] * 0.4):
+            if (c["prot_over"] >= s_1["proteins"] * 0.4
+                    or c["prot_over"] >= s_2["proteins"] * 0.4):
                 extra_1 = extra_relations.get(acc_1, {}).get(acc_2, 0)
                 extra_2 = extra_relations.get(acc_2, {}).get(acc_1, 0)
 
@@ -1136,7 +1134,7 @@ def make_predictions(con, schema, signatures, comparisons):
                 adj_1 = adj_relations.get(acc_2, {}).get(acc_1, 0)
                 adj_2 = adj_relations.get(acc_1, {}).get(acc_2, 0)
 
-                if c['over']:
+                if c["over"]:
                     """
                     frac_1 and frac_2 are the sum of ratios
                     (overlap / match length).
@@ -1157,8 +1155,8 @@ def make_predictions(con, schema, signatures, comparisons):
                         so B < A (because B ~ overlap and A >= overlap)
                         so B CONTAINED_BY A
                     """
-                    len_1 = c['frac_1'] / c['over']
-                    len_2 = c['frac_2'] / c['over']
+                    len_1 = c["frac_1"] / c["over"]
+                    len_2 = c["frac_2"] / c["over"]
                 else:
                     len_1 = len_2 = 0
 
@@ -1172,48 +1170,48 @@ def make_predictions(con, schema, signatures, comparisons):
                         A is a CHILD_OF B
                 """
                 over_1 = min(
-                    c['over'] / s_1['matches'],
-                    c['prot_over'] / s_1['proteins']
+                    c["over"] / s_1["matches"],
+                    c["prot_over"] / s_1["proteins"]
                 )
                 over_2 = min(
-                    c['over'] / s_2['matches'],
-                    c['prot_over'] / s_2['proteins']
+                    c["over"] / s_2["matches"],
+                    c["prot_over"] / s_2["proteins"]
                 )
                 if len_1 >= 0.5 and len_2 >= 0.5:
                     if (over_1 > 0.75 and over_2 >= 0.75 and
                             not extra_1 and not extra_2):
-                        prediction = 'ADD_TO'
+                        prediction = "ADD_TO"
                     elif over_1 > 0.75 and not extra_1 and not adj_1:
-                        prediction = 'CHILD_OF'
+                        prediction = "CHILD_OF"
                     elif over_2 > 0.75 and not extra_2 and not adj_2:
-                        prediction = 'PARENT_OF'  # acc2 child of acc1
+                        prediction = "PARENT_OF"  # acc2 child of acc1
                     elif len_1 >= 0.9:
                         if len_2 >= 0.9:
-                            prediction = 'C/C'
+                            prediction = "C/C"
                         else:
-                            prediction = 'CONTAINED_BY'
+                            prediction = "CONTAINED_BY"
                     elif len_2 >= 0.9:
-                        prediction = 'CONTAINER_OF'
+                        prediction = "CONTAINER_OF"
                     else:
-                        prediction = 'OVERLAPS'
+                        prediction = "OVERLAPS"
                 elif len_1 >= 0.9:
-                    prediction = 'CONTAINED_BY'
+                    prediction = "CONTAINED_BY"
                 elif len_2 >= 0.9:
-                    prediction = 'CONTAINER_OF'
+                    prediction = "CONTAINER_OF"
                 else:
-                    prediction = 'OVERLAPS'
+                    prediction = "OVERLAPS"
 
                 predictions.append((acc_1, acc_2, prediction))
 
                 # switch (acc_1, acc_2) -> (acc_2, acc_1)
-                if prediction == 'CHILD_OF':
-                    prediction = 'PARENT_OF'
-                elif prediction == 'PARENT_OF':
-                    prediction = 'CHILD_OF'
-                elif prediction == 'CONTAINED_BY':
-                    prediction = 'CONTAINER_OF'
-                elif prediction == 'CONTAINER_OF':
-                    prediction = 'CONTAINED_BY'
+                if prediction == "CHILD_OF":
+                    prediction = "PARENT_OF"
+                elif prediction == "PARENT_OF":
+                    prediction = "CHILD_OF"
+                elif prediction == "CONTAINED_BY":
+                    prediction = "CONTAINER_OF"
+                elif prediction == "CONTAINER_OF":
+                    prediction = "CONTAINED_BY"
                 predictions.append((acc_2, acc_1, prediction))
 
     # Populating METHOD_PREDICTION
@@ -1265,7 +1263,7 @@ def make_predictions(con, schema, signatures, comparisons):
     )
 
     signatures = [
-        (acc, s['matches'], s['proteins'])
+        (acc, s["matches"], s["proteins"])
         for acc, s in signatures.items()
     ]
     for i in range(0, len(signatures), BULK_INSERT_SIZE):
@@ -1314,10 +1312,10 @@ def make_predictions(con, schema, signatures, comparisons):
         for acc_2 in comparisons[acc_1]:
             c = comparisons[acc_1][acc_2]
 
-            if c['over']:
-                avg_frac1 = 100 * c['frac_1'] / c['over']
-                avg_frac2 = 100 * c['frac_2'] / c['over']
-                avg_over = c['length'] / c['over']
+            if c["over"]:
+                avg_frac1 = 100 * c["frac_1"] / c["over"]
+                avg_frac2 = 100 * c["frac_2"] / c["over"]
+                avg_over = c["length"] / c["over"]
             else:
                 avg_frac1 = avg_frac2 = avg_over = 0
 
@@ -1329,13 +1327,13 @@ def make_predictions(con, schema, signatures, comparisons):
             and the value for the second is not (e.g. AVG_OVER=25.6)
             """
             overlaps.append((
-                acc_1, acc_2, c['prot'], c['over'], c['prot_over'],
+                acc_1, acc_2, c["prot"], c["over"], c["prot_over"],
                 float(avg_over), float(avg_frac1), float(avg_frac2)
             ))
 
             if acc_1 != acc_2:
                 overlaps.append((
-                    acc_2, acc_1, c['prot'], c['over'], c['prot_over'],
+                    acc_2, acc_1, c["prot"], c["over"], c["prot_over"],
                     float(avg_over), float(avg_frac2), float(avg_frac1)
                 ))
 
@@ -1579,13 +1577,36 @@ def load_matches(dsn, schema, **kwargs):
         # -1 for main process, -1 for loader
         processes = max(1, processes - 2)
 
+        organisers = []
+        step = int(len(chunks) / processes + 1)
+        for i in range(0, len(chunks), step):
+            organisers.append(io.Organiser(
+                keys=chunks[i:i+step],
+                dir=tmpdir
+            ))
+
         # Dumping matches (non-fragment proteins only)
         logging.info("dumping matches")
-        organisers = dump_matches(con, schema, chunks, processes, tmpdir)
+        dump_matches(con, schema, organisers)
 
         logging.info("processing proteins")
-        res = process_proteins(dsn, con, schema, processes, max_gap,
-                               store, organisers, tmpdir)
+        con.drop_table(schema, "METHOD2PROTEIN")
+        con.execute(
+            """
+            CREATE TABLE {}.METHOD2PROTEIN
+            (
+                METHOD_AC VARCHAR2(25) NOT NULL,
+                PROTEIN_AC VARCHAR2(15) NOT NULL,
+                DBCODE CHAR(1) NOT NULL,
+                MD5 VARCHAR(32) NOT NULL,
+                LEN NUMBER(5) NOT NULL,
+                LEFT_NUMBER NUMBER NOT NULL,
+                DESC_ID NUMBER(10) NOT NULL
+            ) NOLOGGING
+            """.format(schema)
+        )
+        res = process_proteins(dsn, schema, organisers, store, max_gap,
+                               tmpdir=tmpdir)
         signatures, comparisons, name_organisers, taxon_organisers = res
 
         # We don't need those any more

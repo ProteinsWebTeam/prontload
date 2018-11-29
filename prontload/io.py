@@ -9,7 +9,7 @@ from tempfile import mkdtemp, mkstemp
 
 
 class Organiser(object):
-    def __init__(self, keys, path=None, dir=None, compress=False):
+    def __init__(self, keys, path=None, dir=None, compress=True):
         self.keys = keys
 
         if path is None:
@@ -97,7 +97,7 @@ class Organiser(object):
 
 
 class Store(object):
-    def __init__(self, dir=None, compress=False):
+    def __init__(self, dir=None, compress=True):
         fd, self.path = mkstemp(dir=dir)
         os.close(fd)
         os.remove(self.path)
