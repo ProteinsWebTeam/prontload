@@ -750,9 +750,9 @@ def dump_proteins(con, schema, store, bucket_size=1000000):
     return accessions
 
 
-def _dump_matches(organiser, queue):
+def _dump_matches(organiser, queue_in, queue_out):
     while True:
-        chunk = queue.get()
+        chunk = queue_in.get()
         if chunk is None:
             break
 
@@ -762,7 +762,7 @@ def _dump_matches(organiser, queue):
         organiser.dump()
 
     size = organiser.merge()
-    queue.put(size)
+    queue_out.put(size)
 
 
 def dump_matches(con, schema, organisers, buffer_size=1000000):
@@ -770,11 +770,12 @@ def dump_matches(con, schema, organisers, buffer_size=1000000):
     workers = []
     workers_chunk = []
     chunks = []
+    queue_out = Queue()
     for organiser in organisers:
         q = Queue(maxsize=1)
         queues.append(q)
 
-        w = Process(target=_dump_matches, args=(organiser, q))
+        w = Process(target=_dump_matches, args=(organiser, q, queue_out))
         w.start()
         workers.append(w)
         workers_chunk.append([])
@@ -863,7 +864,7 @@ def dump_matches(con, schema, organisers, buffer_size=1000000):
         q.put(None)
 
     # Get temporary space used by each organiser
-    size = sum([q.get() for q in queues])
+    size = sum([q.get() for q in queue_out])
 
     # Join processes *after* the output queue is empty (avoid deadlock)
     for w in workers:
