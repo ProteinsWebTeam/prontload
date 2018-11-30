@@ -864,7 +864,7 @@ def dump_matches(con, schema, organisers, buffer_size=1000000):
         q.put(None)
 
     # Get temporary space used by each organiser
-    size = sum([q.get() for q in queue_out])
+    size = sum([queue_out.get() for _ in organisers])
 
     # Join processes *after* the output queue is empty (avoid deadlock)
     for w in workers:
