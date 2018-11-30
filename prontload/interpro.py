@@ -820,34 +820,13 @@ def dump_matches(con, schema, organisers, buffer_size=1000000):
         pos_end = int(row[5])
         fragments_str = row[6]
 
-        if fragments_str is None:
-            fragments = [(pos_start, pos_end)]
-        else:
-            fragments = []
-            for frag in fragments_str.split(','):
-                """
-                Format: START-END-TYPE
-                Types:
-                    * S: Continuous single chain domain
-                    * N: N-terminal discontinuous
-                    * C: C-terminal discontinuous
-                    * NC: N and C -terminal discontinuous
-                """
-                s, e, t = frag.split('-')
-                s = int(s)
-                e = int(e)
-                if s < e:
-                    fragments.append((s, e))
-
-            if not fragments:
-                fragments = [(pos_start, pos_end)]
-
         # Find worker feeding the organiser of this protein
         i = bisect.bisect_right(chunks, protein_acc) - 1
 
 
         workers_chunk[i].append((protein_acc, method_acc, method_dbcode,
-                                 method_type, pos_start, pos_end, fragments))
+                                 method_type, pos_start, pos_end,
+                                 fragments_str))
 
         # Send items to child process
         if len(workers_chunk[i]) == buffer_size:
