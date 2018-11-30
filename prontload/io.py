@@ -37,7 +37,7 @@ class Organiser(object):
                     except EOFError:
                         break
                     else:
-                        yield k, v 
+                        yield k, v
 
     @property
     def size(self):
@@ -117,7 +117,7 @@ class Store(object):
 
     def __iter__(self):
         self.close()
-        self.fh = open(self.path, "rb")
+        self.fh = self.open(self.path, "rb")
         return self
 
     def __next__(self):
