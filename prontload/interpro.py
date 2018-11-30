@@ -908,7 +908,7 @@ def process_proteins(dsn, schema, organisers, store, max_gap,
             _matches = []
             methods = {}
             methods_fragments = {}
-            for m in proteins[protein_acc]:
+            for m in matches:
                 (method_acc, method_dbcode, method_type,
                  pos_start, pos_end, fragments) = m
 
@@ -971,13 +971,13 @@ def process_proteins(dsn, schema, organisers, store, max_gap,
         queue_in.put(chunk)
         chunk = []
 
+    for _ in workers:
+        queue_in.put(None)
+
     logging.info("{:>12} ({:.0f} proteins/sec)".format(
         cnt,
         cnt / (time.time() - ts)
     ))
-
-    for _ in workers:
-        queue_in.put(None)
 
     signatures = {}
     comparisons = {}
