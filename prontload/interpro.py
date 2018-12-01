@@ -339,6 +339,8 @@ class ProteinConsumer(Process):
 
         signatures = {}
         comparisons = {}
+        residue_coverages = {}
+        residue_overlaps = {}
         while True:
             chunk = self.queue_in.get()
             if chunk is None:
@@ -350,8 +352,6 @@ class ProteinConsumer(Process):
 
                 md5 = self.hash(matches, self.max_gap)
                 _signatures, _comparisons = self.compare(matches)
-                # _residues, _overlaps = self.compare_fragments(matches)
-
                 ranks = left_numbers.get(left_num, {"no rank": -1})
 
                 for method_acc in _signatures:
@@ -423,6 +423,9 @@ class ProteinConsumer(Process):
                         if prot_over:
                             comp["prot_over"] += 1
 
+                self.compare_fragments(matches, residue_coverages,
+                                       residue_overlaps)
+
             for i in range(0, len(data), BULK_INSERT_SIZE):
                 con.executemany(
                     """
@@ -448,8 +451,10 @@ class ProteinConsumer(Process):
         self.queue_out.put((
             signatures,
             comparisons,
+            residue_coverages,
+            residue_overlaps,
             organiser_names,
-            organiser_taxa
+            organiser_taxa,
         ))
 
     @staticmethod
@@ -562,7 +567,7 @@ class ProteinConsumer(Process):
         ).hexdigest()
 
     @staticmethod
-    def compare_fragments(matches):
+    def compare_fragments(matches, residues, overlaps):
         # Parse the fragments string
         fragments = []
         for method_acc, start, end, fragments_str in matches:
@@ -603,16 +608,20 @@ class ProteinConsumer(Process):
             else:
                 signatures[method_acc] = [(start, end)]
 
-        residues = {}
-        overlaps = {}
         for acc_1 in signatures:
-            residues[acc_1] = sum([end - start + 1
-                                  for start, end in signatures[acc_1]])
-            overlaps[acc_1] = {}
+            # number of residues covered by the signature matches
+            _residues = sum([e - s + 1 for s, e in signatures[acc_1]])
+
+            if acc_1 in residues:
+                residues[acc_1] += _residues
+            else:
+                residues[acc_1] = _residues
+                overlaps[acc_1] = {}
 
             for acc_2 in signatures:
                 if acc_1 < acc_2:
-                    overlaps[acc_1][acc_2] = 0
+                    if acc_2 not in overlaps[acc_1]:
+                        overlaps[acc_1][acc_2] = 0
 
                     i = 0
                     start_2, end_2 = signatures[acc_2][i]
@@ -627,8 +636,6 @@ class ProteinConsumer(Process):
                         o = min(end_1, end_2) - max(start_1, start_2) + 1
                         if o > 0:
                             overlaps[acc_1][acc_2] += o
-
-        return residues, overlaps
 
 
 def insert_matches(dsn, schema, queue):
@@ -852,7 +859,7 @@ def dump_matches(con, schema, organisers, buffer_size=1000000):
     logging.info("{:>12} (temporary disk space: {} bytes)".format(cnt, size))
 
 
-def process_proteins(dsn, schema, organisers, store, max_gap,
+def process_proteins(con, dsn, schema, organisers, store, max_gap,
                      chunk_size=10000, tmpdir=None):
     queue_in = Queue(maxsize=len(organisers))
     queue_out = Queue()
@@ -958,42 +965,104 @@ def process_proteins(dsn, schema, organisers, store, max_gap,
         cnt / (time.time() - ts)
     ))
 
+    # For predictions
     signatures = {}
     comparisons = {}
+    # For residue overlap comparison
+    residue_coverages = {}
+    residue_overlaps = {}
+    # For counts
     name_organisers = []
     taxon_organisers = []
     for _ in workers:
-        (_signatures, _comparisons,
-         organiser_names, organiser_taxa) = queue_out.get()
+        s, c, rc, ro, no, to = queue_out.get()
 
-        # Merge signatures and comparisons
-        for acc in _signatures:
+        # Merge dictionaries
+        for acc in s:
             if acc in signatures:
-                for k, v in _signatures[acc].items():
+                for k, v in s[acc].items():
                     signatures[acc][k] += v
             else:
-                signatures[acc] = _signatures[acc]
-                continue
+                signatures[acc] = s[acc]
 
-        for acc1 in _comparisons:
-            if acc1 in comparisons:
-                d = comparisons[acc1]
+        for acc_1 in c:
+            if acc_1 in comparisons:
+                d = comparisons[acc_1]
             else:
-                comparisons[acc1] = _comparisons[acc1]
+                comparisons[acc_1] = c[acc_1]
                 continue
 
-            for acc2 in _comparisons[acc1]:
-                if acc2 in d:
-                    for k, v in _comparisons[acc1][acc2].items():
-                        d[acc2][k] += v
+            for acc_2 in c[acc_1]:
+                if acc_2 in d:
+                    for k, v in c[acc_1][acc_2].items():
+                        d[acc_2][k] += v
                 else:
-                    d[acc2] = _comparisons[acc1][acc2]
+                    d[acc_2] = c[acc_1][acc_2]
 
-        name_organisers.append(organiser_names)
-        taxon_organisers.append(organiser_taxa)
+        for acc in rc:
+            if acc in residue_coverages:
+                residue_coverages[acc] += rc[acc]
+            else:
+                residue_coverages[acc] = rc[acc]
+
+        for acc_1 in ro:
+            if acc_1 in residue_overlaps:
+                for acc_2 in ro[acc_1]:
+                    if acc_2 in residue_overlaps[acc_1]:
+                        residue_overlaps[acc_1][acc_2] += ro[acc_1][acc_2]
+                    else:
+                        residue_overlaps[acc_1][acc_2] = ro[acc_1][acc_2]
+            else:
+                residue_overlaps[acc_1] = ro[acc_1]
+
+        name_organisers.append(no)
+        taxon_organisers.append(to)
 
     for w in workers:
         w.join()
+
+    con.drop_table(schema, "METHOD_SIMILARITY")
+    con.execute(
+        """
+        CREATE TABLE {}.METHOD_SIMILARITY
+        (
+            METHOD_AC1 VARCHAR2(25) NOT NULL,
+            METHOD_AC2 VARCHAR2(25) NOT NULL,
+            SIMILARITY BINARY_DOUBLE NOT NULL,
+            CONTAINMENT1 BINARY_DOUBLE NOT NULL,
+            CONTAINMENT2 BINARY_DOUBLE NOT NULL
+        ) NOLOGGING
+        """.format(schema)
+    )
+
+    data = []
+    for acc_1 in residue_overlaps:
+        for acc_2 in residue_overlaps[acc_1]:
+            i = residue_overlaps[acc_1][acc_2]
+            u = residue_coverages[acc_1] + residue_coverages[acc_2] - i
+            index = i / u
+            cont_1 = i / residue_coverages[acc_1]
+            cont_2 = i / residue_coverages[acc_2]
+            data.append((acc_1, acc_2, index, cont_1, cont_2))
+
+    for i in range(0, len(data), BULK_INSERT_SIZE):
+        con.executemany(
+            """
+            INSERT /*+APPEND*/
+            INTO {}.METHOD_SIMILARITY
+            VALUES (:1, :2, :3, :4, :5)
+            """.format(schema),
+            data[i:i+BULK_INSERT_SIZE]
+        )
+        con.commit()
+
+    con.execute(
+        """
+        ALTER TABLE {}.METHOD_SIMILARITY
+        ADD CONSTRAINT PK_METHOD_SIMILARITY
+        PRIMARY KEY (METHOD_AC1, METHOD_AC2)
+        """.format(schema)
+    )
 
     return signatures, comparisons, name_organisers, taxon_organisers
 
@@ -1107,7 +1176,7 @@ def make_predictions(con, schema, signatures, comparisons):
                 extra_2 = extra_relations.get(acc_2, {}).get(acc_1, 0)
 
                 """
-                Inverting acc2 and acc1
+                Inverting acc_2 and acc_1
                 to have the same predictions than HH
                 """
                 # TODO: is this really OK?
@@ -1164,7 +1233,7 @@ def make_predictions(con, schema, signatures, comparisons):
                     elif over_1 > 0.75 and not extra_1 and not adj_1:
                         prediction = "CHILD_OF"
                     elif over_2 > 0.75 and not extra_2 and not adj_2:
-                        prediction = "PARENT_OF"  # acc2 child of acc1
+                        prediction = "PARENT_OF"  # acc_2 child of acc_1
                     elif len_1 >= 0.9:
                         if len_2 >= 0.9:
                             prediction = "C/C"
@@ -1585,7 +1654,7 @@ def load_matches(dsn, schema, **kwargs):
             ) NOLOGGING
             """.format(schema)
         )
-        res = process_proteins(dsn, schema, organisers, store, max_gap,
+        res = process_proteins(con, dsn, schema, organisers, store, max_gap,
                                tmpdir=tmpdir)
         signatures, comparisons, name_organisers, taxon_organisers = res
 
