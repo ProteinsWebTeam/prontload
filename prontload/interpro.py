@@ -896,7 +896,7 @@ def process_proteins(con, dsn, schema, organisers, store, max_gap,
             methods_fragments = {}
             for m in matches:
                 (method_acc, method_dbcode, method_type,
-                 pos_start, pos_end, fragments) = m
+                 pos_start, pos_end, fragments_str) = m
 
                 if method_dbcode in ('F', 'V'):
                     """
@@ -936,7 +936,7 @@ def process_proteins(con, dsn, schema, organisers, store, max_gap,
                         max_pos = pos_end
 
                 _matches.append((method_acc, min_pos, max_pos,
-                                 methods_fragments_str[method_acc]))
+                                 methods_fragments[method_acc]))
 
             chunk.append((protein_acc, prot_dbcode, length, desc_id,
                           left_num, _matches))
