@@ -850,6 +850,8 @@ def dump_matches(con, schema, organisers, buffer_size=1000000):
         q.put(c)
         q.put(None)
 
+    logging.info("{:>12}".format(cnt))
+
     # Get temporary space used by each organiser
     size = sum([queue_out.get() for _ in organisers])
 
@@ -857,7 +859,7 @@ def dump_matches(con, schema, organisers, buffer_size=1000000):
     for w in workers:
         w.join()
 
-    logging.info("{:>12} (temporary disk space: {} bytes)".format(cnt, size))
+    logging.info("temporary disk space: {} bytes".format(size))
 
 
 def process_proteins(con, dsn, schema, organisers, store, max_gap,
