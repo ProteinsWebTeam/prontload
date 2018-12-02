@@ -909,7 +909,7 @@ def process_proteins(con, dsn, schema, organisers, store, max_gap,
                             almost all PRINTS signatures
                     """
                     if method_acc not in methods:
-                        methods_fragments_str[method_acc] = fragments_str
+                        methods_fragments[method_acc] = fragments_str
 
                         if method_type == 'F':
                             # Families: use the entire protein sequence
