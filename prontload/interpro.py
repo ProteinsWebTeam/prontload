@@ -366,8 +366,9 @@ class ProteinConsumer(Process):
                             "matches": 0
                         }
 
-                    signatures[method_ac]["proteins"] += 1
-                    signatures[method_ac]["matches"] += _signatures[method_ac]
+                    signatures[method_acc]["proteins"] += 1
+                    n_matches = _signatures[method_acc]
+                    signatures[method_acc]["matches"] += n_matches
 
                     # Taxonomic origins
                     for rank, tax_id in ranks.items():
