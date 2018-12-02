@@ -573,7 +573,7 @@ class ProteinConsumer(Process):
         fragments = []
         for method_acc, start, end, fragments_str in matches:
             if fragments_str is None:
-                fragments.append(method_acc, start, end)
+                fragments.append((method_acc, start, end))
             else:
                 # Discontinuous domains
                 fallback = True
@@ -592,11 +592,11 @@ class ProteinConsumer(Process):
                     if pos_start < pos_end:
                         # At least one well formated discontinuous domain
                         fallback = False
-                        fragments.append(method_acc, pos_start, pos_end)
+                        fragments.append((method_acc, pos_start, pos_end))
 
                 if fallback:
                     # Fallback to match start/end positions
-                    fragments.append(method_acc, start, end)
+                    fragments.append((method_acc, start, end))
 
         # Sort by positions
         fragments.sort(key=lambda x: (x[1], x[2]))
