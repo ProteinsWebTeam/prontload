@@ -101,7 +101,10 @@ class Store(object):
     def __init__(self, path: Union[str, None]=None, dir=None):
         if path:
             self.path = path
-            self.fh = gzip.open(self.path, "rb")
+            if os.path.isfile(self.path):
+                self.fh = gzip.open(self.path, "rb")
+            else:
+                self.fh = gzip.open(self.path, "wb")
             self.delete_on_close = False
         else:
             fd, self.path = mkstemp(dir=dir)
