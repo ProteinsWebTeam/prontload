@@ -6,6 +6,7 @@ import gzip
 import os
 import pickle
 from tempfile import mkdtemp, mkstemp
+from typing import Union
 
 
 class Organiser(object):
@@ -97,12 +98,17 @@ class Organiser(object):
 
 
 class Store(object):
-    def __init__(self, dir=None, compress=True):
-        fd, self.path = mkstemp(dir=dir)
-        os.close(fd)
-        os.remove(self.path)
-        self.open = gzip.open if compress else open
-        self.fh = self.open(self.path, "wb")
+    def __init__(self, path: Union[str, None]=None, dir=None):
+        if path:
+            self.path = path
+            self.fh = gzip.open(self.path, "rb")
+            self.delete_on_close = False
+        else:
+            fd, self.path = mkstemp(dir=dir)
+            os.close(fd)
+            os.remove(self.path)
+            self.fh = gzip.open(self.path, "wb")
+            self.delete_on_close = True
 
     def __enter__(self):
         return self
@@ -117,7 +123,7 @@ class Store(object):
 
     def __iter__(self):
         self.close()
-        self.fh = self.open(self.path, "rb")
+        self.fh = gzip.open(self.path, "rb")
         return self
 
     def __next__(self):
@@ -144,6 +150,6 @@ class Store(object):
             self.fh = None
 
     def remove(self):
-        if self.path is not None:
+        if self.path is not None and self.delete_on_close:
             os.remove(self.path)
             self.path = None
