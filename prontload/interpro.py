@@ -732,134 +732,71 @@ def insert_matches(dsn, schema, queue):
     queue.put(methods)
 
 
-def dump_proteins(con, schema, store, bucket_size=1000000):
-    accessions = []
-    cnt = bucket_size
-    for row in con.get(
-            """
-            SELECT
-              P.PROTEIN_AC, P.LEN, P.DBCODE, D.DESC_ID, NVL(E.LEFT_NUMBER, 0)
-            FROM {0}.PROTEIN P
-            INNER JOIN {0}.ETAXI E
-              ON P.TAX_ID = E.TAX_ID
-            INNER JOIN {0}.PROTEIN_DESC D
-              ON P.PROTEIN_AC = D.PROTEIN_AC
-            WHERE P.FRAGMENT = 'N'
-            ORDER BY P.PROTEIN_AC
-            """.format(schema)
-    ):
-        store.add(row)
-        if cnt == bucket_size:
-            accessions.append(row[0])
-            cnt = 1
-        else:
+def dump_proteins(dsn, schema, dst):
+    with io.Store(dst) as store:
+        con = Connection(dsn)
+        cnt = 0
+        for row in con.get(
+                """
+                SELECT
+                  P.PROTEIN_AC, P.LEN, P.DBCODE, D.DESC_ID, NVL(E.LEFT_NUMBER, 0)
+                FROM {0}.PROTEIN P
+                INNER JOIN {0}.ETAXI E
+                  ON P.TAX_ID = E.TAX_ID
+                INNER JOIN {0}.PROTEIN_DESC D
+                  ON P.PROTEIN_AC = D.PROTEIN_AC
+                WHERE P.FRAGMENT = 'N'
+                ORDER BY P.PROTEIN_AC
+                """.format(schema)
+        ):
+            store.add(row)
             cnt += 1
+            if not cnt % 10000000:
+                logging.info("proteins: {:>12}".format(cnt))
 
-    return accessions
-
-
-def _dump_matches(organiser, queue_in, queue_out):
-    while True:
-        chunk = queue_in.get()
-        if chunk is None:
-            break
-
-        for protein_acc, *match in chunk:
-            organiser.add(protein_acc, match)
-
-        organiser.dump()
-
-    size = organiser.merge()
-    queue_out.put(size)
+        logging.info("proteins: {:>12}".format(cnt))
 
 
-def dump_matches(con, schema, organisers, buffer_size=1000000):
-    queues = []
-    workers = []
-    workers_chunk = []
-    chunks = []
-    queue_out = Queue()
-    for organiser in organisers:
-        q = Queue(maxsize=1)
-        queues.append(q)
+def dump_matches(dsn, schema, dst):
+    with io.Store(dst) as store:
+        con = Connection(dsn)
+        cnt = 0
 
-        w = Process(target=_dump_matches, args=(organiser, q, queue_out))
-        w.start()
-        workers.append(w)
-        workers_chunk.append([])
+        """
+        JOIN ETAXI and PROTEIN_DESC to be sure to dump *only* matches
+            on proteins dumped in dump_proteins()
+        """
+        for row in con.get(
+                """
+                SELECT
+                  MA.PROTEIN_AC,
+                  MA.METHOD_AC,
+                  MA.DBCODE,
+                  ME.SIG_TYPE,
+                  MA.POS_FROM,
+                  MA.POS_TO,
+                  MA.FRAGMENTS
+                FROM INTERPRO.MATCH MA
+                  INNER JOIN {0}.METHOD ME
+                    ON MA.METHOD_AC = ME.METHOD_AC
+                WHERE MA.PROTEIN_AC IN (
+                  SELECT P.PROTEIN_AC
+                  FROM {0}.PROTEIN P
+                  INNER JOIN {0}.ETAXI E
+                    ON P.TAX_ID = E.TAX_ID
+                  INNER JOIN {0}.PROTEIN_DESC D
+                    ON P.PROTEIN_AC = D.PROTEIN_AC
+                  WHERE P.FRAGMENT = 'N'
+                )
+                ORDER BY MA.PROTEIN_AC
+                """.format(schema)
+        ):
+            store.add(row)
+            cnt += 1
+            if not cnt % 100000000:
+                logging.info("matches: {:>12}".format(cnt))
 
-        chunks.append(organiser.keys[0])
-
-    buffer_size //= len(organisers)
-    cnt = 0
-    """
-    JOIN ETAXI and PROTEIN_DESC to be sure to dump *only* matches
-        on proteins dumped in dump_proteins()
-    """
-    for row in con.get(
-            """
-            SELECT
-              MA.PROTEIN_AC,
-              MA.METHOD_AC,
-              MA.DBCODE,
-              ME.SIG_TYPE,
-              MA.POS_FROM,
-              MA.POS_TO,
-              MA.FRAGMENTS
-            FROM INTERPRO.MATCH MA
-              INNER JOIN {0}.METHOD ME
-                ON MA.METHOD_AC = ME.METHOD_AC
-            WHERE MA.PROTEIN_AC IN (
-              SELECT P.PROTEIN_AC
-              FROM {0}.PROTEIN P
-              INNER JOIN {0}.ETAXI E
-                ON P.TAX_ID = E.TAX_ID
-              INNER JOIN {0}.PROTEIN_DESC D
-                ON P.PROTEIN_AC = D.PROTEIN_AC
-              WHERE P.FRAGMENT = 'N'
-            )
-            """.format(schema)
-    ):
-        protein_acc = row[0]
-        method_acc = row[1]
-        method_dbcode = row[2]
-        method_type = row[3]
-        pos_start = int(row[4])
-        pos_end = int(row[5])
-        fragments_str = row[6]
-
-        # Find worker feeding the organiser of this protein
-        i = bisect.bisect_right(chunks, protein_acc) - 1
-
-
-        workers_chunk[i].append((protein_acc, method_acc, method_dbcode,
-                                 method_type, pos_start, pos_end,
-                                 fragments_str))
-
-        # Send items to child process
-        if len(workers_chunk[i]) == buffer_size:
-            queues[i].put(workers_chunk[i])
-            workers_chunk[i] = []
-
-        cnt += 1
-        if not cnt % 100000000:
-            logging.info("{:>12}".format(cnt))
-
-    # Trigger merging (in child processes)
-    for c, q in zip(workers_chunk, queues):
-        q.put(c)
-        q.put(None)
-
-    logging.info("{:>12}".format(cnt))
-
-    # Get temporary space used by each organiser
-    size = sum([queue_out.get() for _ in organisers])
-
-    # Join processes *after* the output queue is empty (avoid deadlock)
-    for w in workers:
-        w.join()
-
-    logging.info("temporary disk space: {} bytes".format(size))
+        logging.info("matches: {:>12}".format(cnt))
 
 
 def process_proteins(con, dsn, schema, organisers, store, max_gap,
