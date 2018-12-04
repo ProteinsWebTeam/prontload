@@ -326,10 +326,10 @@ class ProteinConsumer(Process):
         }
         left_numbers = {}
         for rank, left_num, tax_id in con.get(
-            """
-            SELECT RANK, LEFT_NUMBER, TAX_ID
-            FROM {}.LINEAGE
-            """.format(self.schema)
+                """
+                SELECT RANK, LEFT_NUMBER, TAX_ID
+                FROM {}.LINEAGE
+                """.format(self.schema)
         ):
             if rank not in ranks:
                 continue
@@ -639,7 +639,7 @@ class ProteinConsumer(Process):
                             overlaps[acc_1][acc_2] += o
 
 
-def insert_matches(dsn, schema, queue):
+def load_matches(dsn, schema):
     con = Connection(dsn)
 
     # Dropping (if exists) and recreating table
@@ -717,19 +717,19 @@ def insert_matches(dsn, schema, queue):
     con.optimize_table(schema, "MATCH", cascade=True)
     con.grant("SELECT", schema, "MATCH", "INTERPRO_SELECT")
 
-    logging.info("MATCH table ready")
-    methods = {}
-    for method_acc, count in con.get(
-        """
-        SELECT METHOD_AC, COUNT(DISTINCT PROTEIN_AC)
-        FROM {}.MATCH
-        GROUP BY METHOD_AC
-        """.format(schema)
-    ):
-        methods[method_acc] = count
-
-    logging.info("protein count for {} signatures".format(len(methods)))
-    queue.put(methods)
+    # logging.info("MATCH table ready")
+    # methods = {}
+    # for method_acc, count in con.get(
+    #         """
+    #         SELECT METHOD_AC, COUNT(DISTINCT PROTEIN_AC)
+    #         FROM {}.MATCH
+    #         GROUP BY METHOD_AC
+    #         """.format(schema)
+    # ):
+    #     methods[method_acc] = count
+    #
+    # logging.info("protein count for {} signatures".format(len(methods)))
+    # queue.put(methods)
 
 
 def dump_proteins(dsn, schema, dst):
@@ -773,18 +773,18 @@ def organise_matches(organiser: io.Organiser, in_queue: Queue,
     out_queue.put(size)
 
 
-def dump_matches_mp(dsn, schema, processes, bucket_size=1000000, dir=None,
-                    buffer_size=1000000):
+def dump_matches(dsn, schema, processes, dst, dir=None, bucket_size=1000000,
+                 buffer_size=1000000):
     con = Connection(dsn)
     i = bucket_size
     keys = []
     for accession, in con.get(
-        """
-        SELECT PROTEIN_AC
-        FROM {}.PROTEIN
-        WHERE FRAGMENT = 'N'
-        ORDER BY PROTEIN_AC
-        """.format(schema)
+            """
+            SELECT PROTEIN_AC
+            FROM {}.PROTEIN
+            WHERE FRAGMENT = 'N'
+            ORDER BY PROTEIN_AC
+            """.format(schema)
     ):
         if i == bucket_size:
             keys.append(accession)
@@ -868,13 +868,19 @@ def dump_matches_mp(dsn, schema, processes, bucket_size=1000000, dir=None,
     for w in workers:
         w.join()
 
-    logging.info("temporary disk space: {} bytes".format(size))
+    logging.info("organisers disk space: {} bytes".format(size))
 
-    return organisers
+    with io.Store(dst) as store:
+        for o in organisers:
+            for protein_acc, matches in o:
+                store.add((protein_acc, matches))
+
+            o.remove()
+
+        logging.info("store disk space: {} bytes".format(store.size))
 
 
-
-def dump_matches(dsn, schema, dst):
+def _dump_matches(dsn, schema, dst):
     with io.Store(dst) as store:
         con = Connection(dsn)
         cnt = 0
@@ -1661,7 +1667,7 @@ def update_signatures(con, schema, protein_counts):
     con.commit()
 
 
-def load_matches(dsn, schema, **kwargs):
+def _load_matches(dsn, schema, **kwargs):
     processes = kwargs.get("processes", 3)
     max_gap = kwargs.get("max_gap", 20)
     tmpdir = kwargs.get("tmpdir")
