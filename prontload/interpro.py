@@ -922,7 +922,7 @@ def _dump_matches(dsn, schema, dst):
         logging.info("matches: {:>12}".format(cnt))
 
 
-def process_proteins(con, dsn, schema, organisers, store, max_gap,
+def _process_proteins(con, dsn, schema, organisers, store, max_gap,
                      chunk_size=10000, tmpdir=None):
     queue_in = Queue(maxsize=len(organisers))
     queue_out = Queue()
@@ -1665,6 +1665,167 @@ def update_signatures(con, schema, protein_counts):
         )
 
     con.commit()
+
+
+def process_proteins(dsn, schema, proteins_src, matches_src, processes,
+                     **kwargs):
+    chunk_size = kwargs.get("chunk_size", 10000)
+    dir = kwargs.get("dir")
+    max_gap = kwargs.get("max_gap", 20)
+
+    processes = max(1, processes - 1)
+    in_queue = Queue(maxsize=processes)
+    out_queue = Queue()
+    consumers = []
+    for _ in range(processes):
+        c = ProteinConsumer(dsn, schema, max_gap, in_queue, out_queue,
+                            dir=dir)
+        c.start()
+        consumers.append(c)
+
+    chunk = []
+    cnt = 0
+    ts = time.time()
+    with io.Store(proteins_src) as proteins, io.Store(matches_src) as matches:
+        for acc, length, protein_dbcode, desc_id, left_num in proteins:
+            _acc, _matches = next(matches)
+            while _acc < acc:
+                _acc, _matches = next(matches)
+
+            if _acc != acc:
+                continue  # Not matches for this proteins
+
+            protein_matches = []
+            methods = {}
+            methods_fragments = {}
+
+            for m in _matches:
+                (method_acc, method_dbcode, method_type,
+                 pos_start, pos_end, fragments_str) = m
+
+                if method_dbcode in ('F', 'V'):
+                    """
+                    PANTHER & PRINTS:
+                        Merge protein matches.
+                        If the signature is a family*,
+                            use the entire protein.
+
+                        * all PANTHER signatures,
+                            almost all PRINTS signatures
+                    """
+                    if method_acc not in methods:
+                        methods_fragments[method_acc] = fragments_str
+
+                        if method_type == 'F':
+                            # Families: use the entire protein sequence
+                            methods[method_acc] = [(1, length)]
+                        else:
+                            methods[method_acc] = [(pos_start, pos_end)]
+                    elif method_type != 'F':
+                        # Only for non-families
+                        # (because families use the entire protein)
+                        methods[method_acc].append((pos_start, pos_end))
+                else:
+                    protein_matches.append((method_acc, pos_start, pos_end,
+                                            fragments_str))
+
+            # Merge matches
+            for method_acc in methods:
+                min_pos = None
+                max_pos = None
+
+                for pos_start, pos_end in methods[method_acc]:
+                    if min_pos is None or pos_start < min_pos:
+                        min_pos = pos_start
+                    if max_pos is None or pos_end > max_pos:
+                        max_pos = pos_end
+
+                protein_matches.append((method_acc, min_pos, max_pos,
+                                        methods_fragments[method_acc]))
+
+            chunk.append((acc, protein_dbcode, length, desc_id, left_num,
+                          protein_matches))
+
+            if len(chunk) == chunk_size:
+                in_queue.put(chunk)
+                chunk = []
+
+            cnt += 1
+            if not cnt % 1000000:
+                logging.info("{:>12} ({:.0f} proteins/sec)".format(
+                    cnt,
+                    cnt / (time.time() - ts)
+                ))
+
+    if chunk:
+        in_queue.put(chunk)
+        chunk = []
+
+    for _ in consumers:
+        in_queue.put(None)
+
+    logging.info("{:>12} ({:.0f} proteins/sec)".format(
+        cnt,
+        cnt / (time.time() - ts)
+    ))
+
+    # For predictions
+    signatures = {}
+    comparisons = {}
+    # For residue overlap comparison
+    residue_coverages = {}
+    residue_overlaps = {}
+    # For counts
+    name_organisers = []
+    taxon_organisers = []
+    for _ in consumers:
+        s, c, rc, ro, no, to = out_queue.get()
+
+        # Merge dictionaries
+        for acc in s:
+            if acc in signatures:
+                for k, v in s[acc].items():
+                    signatures[acc][k] += v
+            else:
+                signatures[acc] = s[acc]
+
+        for acc_1 in c:
+            if acc_1 in comparisons:
+                d = comparisons[acc_1]
+            else:
+                comparisons[acc_1] = c[acc_1]
+                continue
+
+            for acc_2 in c[acc_1]:
+                if acc_2 in d:
+                    for k, v in c[acc_1][acc_2].items():
+                        d[acc_2][k] += v
+                else:
+                    d[acc_2] = c[acc_1][acc_2]
+
+        for acc in rc:
+            if acc in residue_coverages:
+                residue_coverages[acc] += rc[acc]
+            else:
+                residue_coverages[acc] = rc[acc]
+
+        for acc_1 in ro:
+            if acc_1 in residue_overlaps:
+                for acc_2 in ro[acc_1]:
+                    if acc_2 in residue_overlaps[acc_1]:
+                        residue_overlaps[acc_1][acc_2] += ro[acc_1][acc_2]
+                    else:
+                        residue_overlaps[acc_1][acc_2] = ro[acc_1][acc_2]
+            else:
+                residue_overlaps[acc_1] = ro[acc_1]
+
+        name_organisers.append(no)
+        taxon_organisers.append(to)
+
+    for c in consumers:
+        c.join()
+
+
 
 
 def _load_matches(dsn, schema, **kwargs):
