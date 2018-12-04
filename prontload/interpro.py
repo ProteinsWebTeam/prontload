@@ -757,6 +757,123 @@ def dump_proteins(dsn, schema, dst):
         logging.info("proteins: {:>12}".format(cnt))
 
 
+def organise_matches(organiser: io.Organiser, in_queue: Queue,
+                     out_queue: Queue):
+    while True:
+        chunk = in_queue.get()
+        if chunk is None:
+            break
+
+        for accession, *match in chunk:
+            organiser.add(accession, match)
+
+        organiser.dump()
+
+    size = organiser.merge()
+    out_queue.put(size)
+
+
+def dump_matches_mp(dsn, schema, processes, bucket_size=1000000, dir=None,
+                    buffer_size=1000000):
+    con = Connection(dsn)
+    i = bucket_size
+    keys = []
+    for accession, in con.get(
+        """
+        SELECT PROTEIN_AC
+        FROM {}.PROTEIN
+        WHERE FRAGMENT = 'N'
+        ORDER BY PROTEIN_AC
+        """.format(schema)
+    ):
+        if i == bucket_size:
+            keys.append(accession)
+            i = 1
+        else:
+            i += 1
+
+    out_queue = Queue()
+    processes = max(1, processes - 1)
+    organisers = []
+    queues = []
+    workers = []
+    chunks = []
+    _keys = []
+    step = int(len(keys) / processes + 1)
+    for i in range(0, len(keys), step):
+        o = io.Organiser(keys[i:i+step], dir=dir)
+        q = Queue(maxsize=1)
+        w = Process(target=organise_matches, args=(o, q, out_queue))
+        w.start()
+        organisers.append(o)
+        queues.append(q)
+        workers.append(w)
+        chunks.append([])
+        _keys.append(keys[i])
+
+    cnt = 0
+    keys = _keys
+    buffer_size //= processes
+    for row in con.get(
+            """
+            SELECT
+              MA.PROTEIN_AC,
+              MA.METHOD_AC,
+              MA.DBCODE,
+              ME.SIG_TYPE,
+              MA.POS_FROM,
+              MA.POS_TO,
+              MA.FRAGMENTS
+            FROM INTERPRO.MATCH MA
+              INNER JOIN {0}.METHOD ME
+                ON MA.METHOD_AC = ME.METHOD_AC
+            WHERE MA.PROTEIN_AC IN (
+              SELECT PROTEIN_AC
+              FROM {0}.PROTEIN
+              WHERE FRAGMENT = 'N'
+            )
+            """.format(schema)
+    ):
+        protein_acc = row[0]
+        method_acc = row[1]
+        method_dbcode = row[2]
+        method_type = row[3]
+        pos_start = int(row[4])
+        pos_end = int(row[5])
+        fragments_str = row[6]
+
+        # Find worker feeding the organiser of this protein
+        i = bisect.bisect_right(keys, protein_acc) - 1
+        chunks[i].append((protein_acc, method_acc, method_dbcode, method_type,
+                          pos_start, pos_end, fragments_str))
+
+        if len(chunks[i]) == buffer_size:
+            queues[i].put(chunks[i])
+            chunks[i] = []
+
+        cnt += 1
+        if not cnt % 100000:
+            logging.info("{:>12}".format(cnt))
+
+    # Trigger organiser merging
+    for c, q in zip(chunks, queues):
+        q.put(c)
+        q.put(None)
+
+    logging.info("{:>12}".format(cnt))
+
+    # Get temporary space used by each organiser
+    size = sum([out_queue.get() for _ in workers])
+
+    for w in workers:
+        w.join()
+
+    logging.info("temporary disk space: {} bytes".format(size))
+
+    return organisers
+
+
+
 def dump_matches(dsn, schema, dst):
     with io.Store(dst) as store:
         con = Connection(dsn)
