@@ -146,20 +146,6 @@ def load_matches(dsn, schema):
     con.optimise_table(schema, "MATCH", cascade=True)
     con.grant("SELECT", schema, "MATCH", "INTERPRO_SELECT")
 
-    # logging.info("MATCH table ready")
-    # methods = {}
-    # for method_acc, count in con.get(
-    #         """
-    #         SELECT METHOD_AC, COUNT(DISTINCT PROTEIN_AC)
-    #         FROM {}.MATCH
-    #         GROUP BY METHOD_AC
-    #         """.format(schema)
-    # ):
-    #     methods[method_acc] = count
-    #
-    # logging.info("protein count for {} signatures".format(len(methods)))
-    # queue.put(methods)
-
 
 def load_proteins(dsn, schema):
     con = Connection(dsn)
@@ -1089,9 +1075,10 @@ def _process_proteins(con, dsn, schema, organisers, store, max_gap,
     return signatures, comparisons, name_organisers, taxon_organisers
 
 
-def make_predictions(con, schema, signatures, comparisons):
+def make_predictions(dsn, schema, signatures, comparisons):
     candidates = set()
     non_prosite_candidates = set()
+    con = Connection(dsn)
     for method_acc, dbcode in con.get(
             """
             SELECT METHOD_AC, DBCODE
@@ -1309,7 +1296,7 @@ def make_predictions(con, schema, signatures, comparisons):
         )
         con.commit()
 
-    # Optimizing METHOD_PREDICTION
+    # Optimising METHOD_PREDICTION
     con.execute(
         """
         ALTER TABLE {}.METHOD_PREDICTION
@@ -1349,7 +1336,7 @@ def make_predictions(con, schema, signatures, comparisons):
         )
         con.commit()
 
-    # Optimizing METHOD_MATCH
+    # Optimising METHOD_MATCH
     con.execute(
         """
         ALTER TABLE {}.METHOD_MATCH
@@ -1422,7 +1409,7 @@ def make_predictions(con, schema, signatures, comparisons):
         )
         con.commit()
 
-    # Optimizing METHOD_OVERLAP
+    # Optimising METHOD_OVERLAP
     con.execute(
         """
         ALTER TABLE {}.METHOD_OVERLAP
@@ -1434,7 +1421,66 @@ def make_predictions(con, schema, signatures, comparisons):
     con.grant("SELECT", schema, "METHOD_OVERLAP", "INTERPRO_SELECT")
 
 
-def optimize_method2protein(con, schema):
+def calculate_similarities(dsn, schema, coverages, overlaps):
+    con.drop_table(schema, "METHOD_SIMILARITY")
+    con.execute(
+        """
+        CREATE TABLE {}.METHOD_SIMILARITY
+        (
+            METHOD_AC1 VARCHAR2(25) NOT NULL,
+            METHOD_AC2 VARCHAR2(25) NOT NULL,
+            SIMILARITY BINARY_DOUBLE NOT NULL,
+            CONTAINMENT1 BINARY_DOUBLE NOT NULL,
+            CONTAINMENT2 BINARY_DOUBLE NOT NULL
+        ) NOLOGGING
+        """.format(schema)
+    )
+
+    data = []
+    for acc_1 in overlaps:
+        for acc_2 in overlaps[acc_1]:
+            i = overlaps[acc_1][acc_2]
+            u = coverages[acc_1] + coverages[acc_2] - i
+            index = i / u
+            cont_1 = i / coverages[acc_1]
+            cont_2 = i / coverages[acc_2]
+            data.append((acc_1, acc_2, index, cont_1, cont_2))
+
+            if len(data) == BULK_INSERT_SIZE:
+                con.executemany(
+                    """
+                    INSERT /*+APPEND*/
+                    INTO {}.METHOD_SIMILARITY
+                    VALUES (:1, :2, :3, :4, :5)
+                    """.format(schema),
+                    data
+                )
+                con.commit()
+                data = []
+
+    if data:
+        con.executemany(
+            """
+            INSERT /*+APPEND*/
+            INTO {}.METHOD_SIMILARITY
+            VALUES (:1, :2, :3, :4, :5)
+            """.format(schema),
+            data
+        )
+        con.commit()
+        data = []
+
+    con.execute(
+        """
+        ALTER TABLE {}.METHOD_SIMILARITY
+        ADD CONSTRAINT PK_METHOD_SIMILARITY
+        PRIMARY KEY (METHOD_AC1, METHOD_AC2)
+        """.format(schema)
+    )
+
+
+def optimise_method2protein(dsn, schema):
+    con = Connection(dsn)
     con.execute(
         """
         ALTER TABLE {}.METHOD2PROTEIN
@@ -1475,7 +1521,8 @@ def optimize_method2protein(con, schema):
     con.grant("SELECT", schema, "METHOD2PROTEIN", "INTERPRO_SELECT")
 
 
-def load_description_counts(con, schema, organisers):
+def load_description_counts(dsn, schema, organisers):
+    con = Connection(dsn)
     con.drop_table(schema, "METHOD_DESC")
     con.execute(
         """
@@ -1541,7 +1588,8 @@ def load_description_counts(con, schema, organisers):
     con.grant("SELECT", schema, "METHOD_DESC", "INTERPRO_SELECT")
 
 
-def load_taxonomy_counts(con, schema, organisers):
+def load_taxonomy_counts(dsn, schema, organisers):
+    con = Connection(dsn)
     con.drop_table(schema, "METHOD_TAXA")
     con.execute(
         """
@@ -1610,20 +1658,6 @@ def load_taxonomy_counts(con, schema, organisers):
     )
     con.optimise_table(schema, "METHOD_TAXA", cascade=True)
     con.grant("SELECT", schema, "METHOD_TAXA", "INTERPRO_SELECT")
-
-
-def update_signatures(con, schema, protein_counts):
-    for method_acc, count in protein_counts.items():
-        con.execute(
-            """
-            UPDATE {}.METHOD
-            SET PROTEIN_COUNT = :1
-            WHERE METHOD_AC = :2
-            """.format(schema),
-            count, method_acc
-        )
-
-    con.commit()
 
 
 def process_proteins(dsn, schema, proteins_src, matches_src, processes,
@@ -1788,85 +1822,6 @@ def process_proteins(dsn, schema, proteins_src, matches_src, processes,
             name_organisers, taxon_organisers)
 
 
-def _load_matches(dsn, schema, **kwargs):
-    processes = kwargs.get("processes", 3)
-    max_gap = kwargs.get("max_gap", 20)
-    tmpdir = kwargs.get("tmpdir")
-
-    if tmpdir:
-        os.makedirs(tmpdir, exist_ok=True)
-
-    # Creating MATCH table (in a separate process)
-    queue = Queue(maxsize=1)
-    loader = Process(target=insert_matches, args=(dsn, schema, queue))
-    loader.start()
-
-    con = Connection(dsn)
-    with io.Store(dir=tmpdir) as store:
-        logging.info("dumping proteins")
-        chunks = dump_proteins(con, schema, store)
-        logging.info("{}: {}".format(store.path, store.size))
-
-        # -1 for main process, -1 for loader
-        processes = max(1, processes - 2)
-
-        organisers = []
-        step = int(len(chunks) / processes + 1)
-        for i in range(0, len(chunks), step):
-            organisers.append(io.Organiser(
-                keys=chunks[i:i+step],
-                dir=tmpdir
-            ))
-
-        # Dumping matches (non-fragment proteins only)
-        logging.info("dumping matches")
-        dump_matches(con, schema, organisers)
-
-        logging.info("processing proteins")
-        con.drop_table(schema, "METHOD2PROTEIN")
-        con.execute(
-            """
-            CREATE TABLE {}.METHOD2PROTEIN
-            (
-                METHOD_AC VARCHAR2(25) NOT NULL,
-                PROTEIN_AC VARCHAR2(15) NOT NULL,
-                DBCODE CHAR(1) NOT NULL,
-                MD5 VARCHAR(32) NOT NULL,
-                LEN NUMBER(5) NOT NULL,
-                LEFT_NUMBER NUMBER NOT NULL,
-                DESC_ID NUMBER(10) NOT NULL
-            ) NOLOGGING
-            """.format(schema)
-        )
-        res = process_proteins(con, dsn, schema, organisers, store, max_gap,
-                               tmpdir=tmpdir)
-        signatures, comparisons, name_organisers, taxon_organisers = res
-
-        # We don't need those any more
-        for o in organisers:
-            o.remove()
-
-    # Populating/optimizing overlap/prediction tables
-    logging.info("making predictions")
-    make_predictions(con, schema, signatures, comparisons)
-
-    # Creating constraints/indexes
-    logging.info("optimizing METHOD2PROTEIN")
-    optimize_method2protein(con, schema)
-
-    # Insert signature counts
-    logging.info("creating METHOD_DESC")
-    load_description_counts(con, schema, name_organisers)
-
-    logging.info("creating METHOD_TAXA")
-    load_taxonomy_counts(con, schema, taxon_organisers)
-
-    logging.info("updating METHOD")
-    protein_counts = queue.get()
-    loader.join()
-    update_signatures(con, schema, protein_counts)
-
-
 def copy_schema(dsn, schema):
     proc = "{}.copy_interpro_analysis.refresh".format(schema)
     Connection(dsn).exec(proc)
@@ -1981,3 +1936,18 @@ def _get_entry_key(entry):
         return 0, entry["type"], entry["acc"]
     else:
         return 1, entry["type"], entry["acc"]
+
+
+def update_signature_protein_counts(dsn, schema):
+    con = Connection(dsn)
+    con.execute(
+        """
+        UPDATE {0}.METHOD ME
+        SET PROTEIN_COUNT = (
+            SELECT COUNT(DISTINCT PROTEIN_AC)
+            FROM {0}.MATCH MA
+            WHERE ME.METHOD_AC = MA.METHOD_AC
+        )
+        """.format(schema)
+    )
+    con.commit()

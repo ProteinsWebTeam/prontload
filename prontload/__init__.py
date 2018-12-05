@@ -4,7 +4,6 @@
 __version__ = "0.4.5"
 
 import logging
-from typing import Iterable
 
 logging.basicConfig(
     level=logging.INFO,
@@ -13,10 +12,20 @@ logging.basicConfig(
 )
 
 
-def exec_functions(*iterable: Iterable):
+def exec_functions(*iterable):
     for name, func, args, kwargs in iterable:
         logging.info("running '{}'".format(name))
         func(*args, **kwargs)
+
+
+def exec_function(queue):
+    while True:
+        args = queue.get()
+        if args is None:
+            break
+
+        func, args = args
+        func(*args)
 
 
 def cli():
@@ -24,7 +33,7 @@ def cli():
     import os
     import json
     from datetime import datetime
-    from multiprocessing import Process
+    from multiprocessing import Process, Queue
     from tempfile import gettempdir
     from threading import Thread
 
@@ -189,11 +198,27 @@ def cli():
     t_group = Thread(target=exec_functions, args=group)
     t_group.start()
 
-    for name in ("synonyms", "signatures", "taxa"):
-        s = steps[name]
-        if s["run"]:
-            logging.info("running '{}'".format(name))
-            s["func"](*s["args"], **s.get("kwargs", {}))
+    s = steps["synonyms"]
+    if s["run"]:
+        logging.info("running 'synonyms'")
+        s["func"](*s["args"], **s.get("kwargs", {}))
+
+    s = steps["signatures"]
+    if s["run"]:
+        logging.info("running 'signatures'")
+        s["func"](*s["args"], **s.get("kwargs", {}))
+
+        # The PROTEIN_COUNT column defaults to 0
+        # Do NOT start the thread now
+        t_prot_counts = Thread(target=update_signature_protein_counts,
+                               args=(dsn, schema))
+    else:
+        t_prot_counts = Thread()
+
+    s = steps["taxa"]
+    if s["run"]:
+        logging.info("running 'taxa'")
+        s["func"](*s["args"], **s.get("kwargs", {}))
 
     s = steps["proteins"]
     if s["run"]:
@@ -226,9 +251,8 @@ def cli():
         One process is reserved to descriptions load and proteins export
         """
         logging.info("exporting matches")
-        processes = args.processes - 1
         t_matches = Thread(target=interpro.dump_matches,
-                           args=(dsn, schema, processes, matches_f,
+                           args=(dsn, schema, args.processes-1, matches_f,
                                  args.tmpdir))
         t_matches.start()
 
@@ -243,7 +267,79 @@ def cli():
 
         p_proteins.join()
         t_matches.join()
+
+        # Once both exports are completed, we can process proteins
+        logging.info("processing proteins")
+        res = interpro.process_proteins(dsn, schema, proteins_f, matches_f,
+                                        args.processes, dir=args.dir,
+                                        max_gap=max_gap)
+
+        # We can also update sigantures with their protein count
+        t_prot_counts.start()
+
+        """
+        s: dict, number of proteins and matches for each signatures
+        c: dict (of dict), multiple comparison metrics between two signatures
+        rc: dict, number of residues matched for each signature
+        ro: dict (dict), residue overlap between two signatures
+        no: list, organisers of UniProt descriptions per signature
+        to: list, organisers of taxa/ranks per signature
+        """
+        s, c, rc, ro, no, to = res
+
+        # Finalise the METHOD2PROTEIN table in a separate thread
+        logging.info("optimising METHOD2PROTEIN")
+        t_method2proteins = Thread(target=interpro.optimise_method2protein,
+                                   args=(dsn, schema))
+        t_method2proteins.start()
+
+        """
+        We still have four steps to do:
+            - make and store predictions (`s` and `c`)
+            - calculate the Jaccard/containment indices (`rc`, `ro`)
+            - merge UniProt description organisers and store counts (`no`)
+            - merge taxa/ranks organisers and store counts (`to`)
+
+        -> create a pool of workers and submit functions and arguments
+        """
+
+        # Pool of between 1 and 4 workers (inclusive)
+        n = min(4, max(1, args.processes-1))
+        pool = []
+        q = Queue(maxsize=n)
+        for _ in range(n):
+            p = Process(target=exec_function, args=(q,))
+            p.start()
+            pool.append(p)
+
+        logging.info("making predictions")
+        q.put((interpro.make_predictions, (dsn, schema, s, c)))
+
+        """
+        On the following calls:
+            log message only once the task is accepted in the queue
+            so we never log something way before it actually starts
+        """
+        q.put((interpro.calculate_similarities, (dsn, schema, rc, ro)))
+        logging.info("calculating similarities")
+
+        q.put((interpro.load_description_counts, (dsn, schema, no)))
+        logging.info("loading UniProt description counts")
+
+        q.put((interpro.load_taxonomy_counts, (dsn, schema, ro)))
+        logging.info("loading taxonomic origin counts")
+
+        for _ in pool:
+            q.put(None)
+
+        for p in pool:
+            p.join()
+
+        t_method2proteins.join()
+        t_prot_counts.join()
     else:
+        t_prot_counts.start()
+        t_prot_counts.join()
         p_descriptions.join()
 
     t_group.join()
