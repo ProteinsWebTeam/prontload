@@ -257,7 +257,6 @@ def cli():
         res = interpro.process_proteins(dsn, schema, proteins_f, matches_f,
                                         args.processes, dir=args.dir,
                                         max_gap=max_gap)
-
         """
         s: dict, number of proteins and matches for each signatures
         c: dict (of dict), multiple comparison metrics between two signatures
@@ -267,6 +266,10 @@ def cli():
         to: list, organisers of taxa/ranks per signature
         """
         s, c, rc, ro, no, to = res
+
+        # We don't need the stores any more
+        os.remove(proteins_f)
+        os.remove(matches_f)
 
         # Finalise the METHOD2PROTEIN table in a separate thread
         logging.info("optimising METHOD2PROTEIN")
