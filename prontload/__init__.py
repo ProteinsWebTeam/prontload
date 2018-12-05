@@ -81,6 +81,36 @@ def cli():
             "skip": True
         },
 
+        # Grouped in a separate thread
+        "databases": {
+            "func": interpro.load_databases,
+            "args": (dsn, schema),
+        },
+        "comments": {
+            "func": uniprot.load_comments,
+            "args": (dsn, schema),
+        },
+        "enzymes": {
+            "func": uniprot.load_enzymes,
+            "args": (dsn, schema),
+        },
+        "annotations": {
+            "func": goa.load_annotations,
+            "args": (dsn, schema),
+        },
+        "publications": {
+            "func": goa.load_publications,
+            "args": (dsn, schema),
+        },
+        "terms": {
+            "func": goa.load_terms,
+            "args": (dsn, schema),
+        },
+        "matches": {
+            "func": interpro.load_matches,
+            "args": (dsn, schema),
+        },
+
         # In main thread, one after the other
         "synonyms": {
             "func": interpro.create_synonyms,
@@ -122,36 +152,6 @@ def cli():
         "report": {
             "func": interpro.report_description_changes,
             "args": (dsn, schema, args.output)
-        },
-
-        # Grouped in a separate thread
-        "databases": {
-            "func": interpro.load_databases,
-            "args": (dsn, schema),
-        },
-        "comments": {
-            "func": uniprot.load_comments,
-            "args": (dsn, schema),
-        },
-        "enzymes": {
-            "func": uniprot.load_enzymes,
-            "args": (dsn, schema),
-        },
-        "annotations": {
-            "func": goa.load_annotations,
-            "args": (dsn, schema),
-        },
-        "publications": {
-            "func": goa.load_publications,
-            "args": (dsn, schema),
-        },
-        "terms": {
-            "func": goa.load_terms,
-            "args": (dsn, schema),
-        },
-        "matches": {
-            "func": interpro.load_matches,
-            "args": (dsn, schema),
         },
 
         # After everything is done
@@ -321,5 +321,11 @@ def cli():
         p_descriptions.join()
 
     t_group.join()
+
+    for name in ("report", "copy"):
+        s = steps[name]
+        if s["run"]:
+            logging.info("running '{}'".format(name))
+            s["func"](*s["args"], **s.get("kwargs", {}))
 
     logging.info("complete")
