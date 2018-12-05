@@ -837,15 +837,15 @@ def dump_matches(dsn, schema, processes, dst, dir=None, bucket_size=1000000,
             chunks[i] = []
 
         cnt += 1
-        if not cnt % 100000:
-            logging.info("{:>12}".format(cnt))
+        if not cnt % 100000000:
+            logging.info("matches: {:>12}".format(cnt))
 
     # Trigger organiser merging
     for c, q in zip(chunks, queues):
         q.put(c)
         q.put(None)
 
-    logging.info("{:>12}".format(cnt))
+    logging.info("matches: {:>12}".format(cnt))
 
     # Get temporary space used by each organiser
     size = sum([out_queue.get() for _ in workers])
