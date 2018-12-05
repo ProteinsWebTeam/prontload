@@ -165,20 +165,15 @@ def load_descriptions(dsn, schema, tmpdir=None, chunk_size=100000):
         ORDER BY DESCR
     """
     with io.Store(dir=tmpdir) as store:
-        descriptions = []
         proteins = set()
         _text = None
         for text, accession in con.get(query):
             if text != _text:
                 if _text:
-                    descriptions.append({
+                    store.add({
                         "text": _text,
                         "proteins": proteins
                     })
-
-                    if len(descriptions) == chunk_size:
-                        store.add(descriptions)
-                        descriptions = []
 
                 proteins = set()
                 _text = text
@@ -186,47 +181,73 @@ def load_descriptions(dsn, schema, tmpdir=None, chunk_size=100000):
             proteins.add(accession)
 
         if proteins:
-            descriptions.append({
+            store.add({
                 "text": _text,
                 "proteins": proteins
             })
-            store.add(descriptions)
 
         logging.info("temporary file: {:,} bytes".format(store.size))
 
         desc_id = 1
-        for descriptions in store:
-            cv_table = []
-            rel_table = []
-            for d in descriptions:
-                cv_table.append((desc_id, d["text"]))
-                rel_table += [
-                    (accession, desc_id)
-                    for accession in d["proteins"]
-                ]
-                desc_id += 1
+        cv_table = []
+        rel_table = []
+        for description in store:
+            cv_table.append((desc_id, description["text"]))
+            for accession in description["proteins"]:
+                rel_table.append((accession, desc_id))
 
-            con.executemany(
-                """
-                INSERT /*+ APPEND */ INTO {}.DESC_VALUE (DESC_ID, TEXT)
-                VALUES (:1, :2)
-                """.format(schema),
-                cv_table
-            )
-            # Commit after each transaction to avoid ORA-12838
-            con.commit()
-
-            for i in range(0, len(rel_table), chunk_size):
+            if len(rel_table) >= chunk_size:
                 con.executemany(
                     """
-                    INSERT /*+ APPEND */ INTO {}.PROTEIN_DESC (
-                        PROTEIN_AC, DESC_ID
-                    )
+                    INSERT /*+ APPEND */ INTO {}.DESC_VALUE (DESC_ID, TEXT)
                     VALUES (:1, :2)
                     """.format(schema),
-                    rel_table[i:i+chunk_size]
+                    cv_table
                 )
+                # Commit after each transaction to avoid ORA-12838
                 con.commit()
+
+                for i in range(0, len(rel_table), chunk_size):
+                    con.executemany(
+                        """
+                        INSERT /*+ APPEND */ INTO {}.PROTEIN_DESC (
+                            PROTEIN_AC, DESC_ID
+                        )
+                        VALUES (:1, :2)
+                        """.format(schema),
+                        rel_table[i:i+chunk_size]
+                    )
+                    con.commit()
+
+                cv_table = []
+                rel_table = []
+
+            desc_id += 1
+
+    if cv_table:
+        con.executemany(
+            """
+            INSERT /*+ APPEND */ INTO {}.DESC_VALUE (DESC_ID, TEXT)
+            VALUES (:1, :2)
+            """.format(schema),
+            cv_table
+        )
+        con.commit()
+
+    for i in range(0, len(rel_table), chunk_size):
+        con.executemany(
+            """
+            INSERT /*+ APPEND */ INTO {}.PROTEIN_DESC (
+                PROTEIN_AC, DESC_ID
+            )
+            VALUES (:1, :2)
+            """.format(schema),
+            rel_table[i:i+chunk_size]
+        )
+        con.commit()
+
+    cv_table = []
+    rel_table = []
 
     con.execute(
         """
