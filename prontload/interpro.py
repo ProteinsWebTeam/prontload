@@ -8,6 +8,7 @@ import logging
 import os
 import time
 from multiprocessing import Process, Queue
+from typing import Tuple
 
 from . import io
 from .oracledb import Connection
@@ -1626,7 +1627,7 @@ def update_signatures(con, schema, protein_counts):
 
 
 def process_proteins(dsn, schema, proteins_src, matches_src, processes,
-                     **kwargs):
+                     **kwargs) -> Tuple[dict, dict, dict, dict, list, list]:
     chunk_size = kwargs.get("chunk_size", 10000)
     dir = kwargs.get("dir")
     max_gap = kwargs.get("max_gap", 20)
@@ -1709,7 +1710,7 @@ def process_proteins(dsn, schema, proteins_src, matches_src, processes,
                 chunk = []
 
             cnt += 1
-            if not cnt % 1000000:
+            if not cnt % 10000000:
                 logging.info("{:>12} ({:.0f} proteins/sec)".format(
                     cnt,
                     cnt / (time.time() - ts)
@@ -1783,7 +1784,8 @@ def process_proteins(dsn, schema, proteins_src, matches_src, processes,
     for c in consumers:
         c.join()
 
-
+    return (signatures, comparisons, residue_coverages, residue_overlaps,
+            name_organisers, taxon_organisers)
 
 
 def _load_matches(dsn, schema, **kwargs):
