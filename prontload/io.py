@@ -6,7 +6,7 @@ import gzip
 import os
 import pickle
 from tempfile import mkdtemp, mkstemp
-from typing import Union
+from typing import Optional
 
 
 class Organiser(object):
@@ -98,7 +98,7 @@ class Organiser(object):
 
 
 class Store(object):
-    def __init__(self, path: Union[str, None]=None, dir=None):
+    def __init__(self, path: Optional[str]=None, dir=None):
         if path:
             self.path = path
             if os.path.isfile(self.path):
