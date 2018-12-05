@@ -30,10 +30,10 @@ def exec_function(queue):
 
 def cli():
     import argparse
+    import multiprocessing as mp
     import os
     import json
     from datetime import datetime
-    from multiprocessing import Process, Queue
     from tempfile import gettempdir
     from threading import Thread
 
@@ -198,27 +198,11 @@ def cli():
     t_group = Thread(target=exec_functions, args=group)
     t_group.start()
 
-    s = steps["synonyms"]
-    if s["run"]:
-        logging.info("running 'synonyms'")
-        s["func"](*s["args"], **s.get("kwargs", {}))
-
-    s = steps["signatures"]
-    if s["run"]:
-        logging.info("running 'signatures'")
-        s["func"](*s["args"], **s.get("kwargs", {}))
-
-        # The PROTEIN_COUNT column defaults to 0
-        # Do NOT start the thread now
-        t_prot_counts = Thread(target=update_signature_protein_counts,
-                               args=(dsn, schema))
-    else:
-        t_prot_counts = Thread()
-
-    s = steps["taxa"]
-    if s["run"]:
-        logging.info("running 'taxa'")
-        s["func"](*s["args"], **s.get("kwargs", {}))
+    for name in ("synonyms", "signatures", "taxa"):
+        s = steps[name]
+        if s["run"]:
+            logging.info("running '{}'".format(name))
+            s["func"](*s["args"], **s.get("kwargs", {}))
 
     s = steps["proteins"]
     if s["run"]:
@@ -232,10 +216,10 @@ def cli():
     s = steps["descriptions"]
     if s["run"]:
         logging.info("running 'descriptions'")
-        p_descriptions = Process(target=s["func"], args=s["args"],
-                                 kwargs=s.get("kwargs", {}))
+        p_descriptions = mp.Process(target=s["func"], args=s["args"],
+                                    kwargs=s.get("kwargs", {}))
     else:
-        p_descriptions = Process()
+        p_descriptions = mp.Process()
     p_descriptions.start()
 
     # Wait until proteins are loaded in Oracle
@@ -261,8 +245,8 @@ def cli():
 
         # When descriptions are loaded, we can export proteins
         logging.info("exporting proteins")
-        p_proteins = Process(target=interpro.dump_proteins,
-                             args=(dsn, schema, proteins_f))
+        p_proteins = mp.Process(target=interpro.dump_proteins,
+                                args=(dsn, schema, proteins_f))
         p_proteins.start()
 
         p_proteins.join()
@@ -273,9 +257,6 @@ def cli():
         res = interpro.process_proteins(dsn, schema, proteins_f, matches_f,
                                         args.processes, dir=args.dir,
                                         max_gap=max_gap)
-
-        # We can also update sigantures with their protein count
-        t_prot_counts.start()
 
         """
         s: dict, number of proteins and matches for each signatures
@@ -306,9 +287,9 @@ def cli():
         # Pool of between 1 and 4 workers (inclusive)
         n = min(4, max(1, args.processes-1))
         pool = []
-        q = Queue(maxsize=n)
+        q = mp.Queue(maxsize=n)
         for _ in range(n):
-            p = Process(target=exec_function, args=(q,))
+            p = mp.Process(target=exec_function, args=(q,))
             p.start()
             pool.append(p)
 
@@ -336,10 +317,7 @@ def cli():
             p.join()
 
         t_method2proteins.join()
-        t_prot_counts.join()
     else:
-        t_prot_counts.start()
-        t_prot_counts.join()
         p_descriptions.join()
 
     t_group.join()

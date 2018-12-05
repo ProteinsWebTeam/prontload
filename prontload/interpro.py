@@ -146,6 +146,20 @@ def load_matches(dsn, schema):
     con.optimise_table(schema, "MATCH", cascade=True)
     con.grant("SELECT", schema, "MATCH", "INTERPRO_SELECT")
 
+    # TODO: ensure that `METHOD` is ready
+    con.execute(
+        """
+        UPDATE {0}.METHOD ME
+        SET PROTEIN_COUNT = (
+            SELECT COUNT(DISTINCT PROTEIN_AC)
+            FROM {0}.MATCH MA
+            WHERE ME.METHOD_AC = MA.METHOD_AC
+        )
+        """.format(schema)
+    )
+    con.commit()
+    cur.close()
+
 
 def load_proteins(dsn, schema):
     con = Connection(dsn)
@@ -1936,18 +1950,3 @@ def _get_entry_key(entry):
         return 0, entry["type"], entry["acc"]
     else:
         return 1, entry["type"], entry["acc"]
-
-
-def update_signature_protein_counts(dsn, schema):
-    con = Connection(dsn)
-    con.execute(
-        """
-        UPDATE {0}.METHOD ME
-        SET PROTEIN_COUNT = (
-            SELECT COUNT(DISTINCT PROTEIN_AC)
-            FROM {0}.MATCH MA
-            WHERE ME.METHOD_AC = MA.METHOD_AC
-        )
-        """.format(schema)
-    )
-    con.commit()
