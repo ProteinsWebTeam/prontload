@@ -117,7 +117,7 @@ def load_comments(dsn, schema, chunk_size=100000):
         con.commit()
 
     for table in tables:
-        con.optimize_table(schema, table, cascade=True)
+        con.optimise_table(schema, table, cascade=True)
         con.grant("SELECT", schema, table, "INTERPRO_SELECT")
 
 
@@ -243,7 +243,7 @@ def load_descriptions(dsn, schema, tmpdir=None, chunk_size=100000):
     )
 
     for table in tables:
-        con.optimize_table(schema, table, cascade=True)
+        con.optimise_table(schema, table, cascade=True)
         con.grant("SELECT", schema, table, "INTERPRO_SELECT")
 
 
@@ -278,7 +278,7 @@ def load_enzymes(dsn, schema):
 
     con.execute(
         """
-        CREATE INDEX I_ENZYME$PROTEIN 
+        CREATE INDEX I_ENZYME$PROTEIN
         ON {}.ENZYME (PROTEIN_AC) NOLOGGING
         """.format(schema)
     )
@@ -290,5 +290,5 @@ def load_enzymes(dsn, schema):
         """.format(schema)
     )
 
-    con.optimize_table(schema, "ENZYME", cascade=True)
+    con.optimise_table(schema, "ENZYME", cascade=True)
     con.grant("SELECT", schema, "ENZYME", "INTERPRO_SELECT")

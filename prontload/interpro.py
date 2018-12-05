@@ -64,7 +64,7 @@ def load_databases(dsn, schema):
     )
     con.commit()
 
-    con.optimize_table(schema, "CV_DATABASE", cascade=True)
+    con.optimise_table(schema, "CV_DATABASE", cascade=True)
     con.grant("SELECT", schema, "CV_DATABASE", "INTERPRO_SELECT")
 
 
@@ -143,7 +143,7 @@ def load_matches(dsn, schema):
         ON {}.MATCH (DBCODE) NOLOGGING
         """.format(schema)
     )
-    con.optimize_table(schema, "MATCH", cascade=True)
+    con.optimise_table(schema, "MATCH", cascade=True)
     con.grant("SELECT", schema, "MATCH", "INTERPRO_SELECT")
 
     # logging.info("MATCH table ready")
@@ -209,7 +209,7 @@ def load_proteins(dsn, schema):
         """.format(schema)
     )
 
-    con.optimize_table(schema, "PROTEIN", cascade=True)
+    con.optimise_table(schema, "PROTEIN", cascade=True)
     con.grant("SELECT", schema, "PROTEIN", "INTERPRO_SELECT")
 
 
@@ -255,7 +255,7 @@ def load_signatures(dsn, schema):
         """.format(schema)
     )
 
-    con.optimize_table(schema, "METHOD", cascade=True)
+    con.optimise_table(schema, "METHOD", cascade=True)
     con.grant("SELECT", schema, "METHOD", "INTERPRO_SELECT")
 
 
@@ -309,7 +309,7 @@ def load_taxa(dsn, schema):
         """.format(schema)
     )
 
-    con.optimize_table(schema, "ETAXI", cascade=True)
+    con.optimise_table(schema, "ETAXI", cascade=True)
     con.grant("SELECT", schema, "ETAXI", "INTERPRO_SELECT")
 
     taxons = {}
@@ -372,7 +372,7 @@ def load_taxa(dsn, schema):
         """.format(schema)
     )
 
-    con.optimize_table(schema, "LINEAGE", cascade=True)
+    con.optimise_table(schema, "LINEAGE", cascade=True)
     con.grant("SELECT", schema, "LINEAGE", "INTERPRO_SELECT")
 
 
@@ -1317,7 +1317,7 @@ def make_predictions(con, schema, signatures, comparisons):
         PRIMARY KEY (METHOD_AC1, METHOD_AC2)
         """.format(schema)
     )
-    con.optimize_table(schema, "METHOD_PREDICTION", cascade=True)
+    con.optimise_table(schema, "METHOD_PREDICTION", cascade=True)
     con.grant("SELECT", schema, "METHOD_PREDICTION", "INTERPRO_SELECT")
 
     # Populating METHOD_MATCH
@@ -1356,7 +1356,7 @@ def make_predictions(con, schema, signatures, comparisons):
         ADD CONSTRAINT PK_METHOD_MATCH PRIMARY KEY (METHOD_AC)
         """.format(schema)
     )
-    con.optimize_table(schema, "METHOD_MATCH", cascade=True)
+    con.optimise_table(schema, "METHOD_MATCH", cascade=True)
     con.grant("SELECT", schema, "METHOD_MATCH", "INTERPRO_SELECT")
 
     # Creating METHOD_OVERLAP
@@ -1430,7 +1430,7 @@ def make_predictions(con, schema, signatures, comparisons):
         PRIMARY KEY (METHOD_AC1, METHOD_AC2)
         """.format(schema)
     )
-    con.optimize_table(schema, "METHOD_OVERLAP", cascade=True)
+    con.optimise_table(schema, "METHOD_OVERLAP", cascade=True)
     con.grant("SELECT", schema, "METHOD_OVERLAP", "INTERPRO_SELECT")
 
 
@@ -1471,7 +1471,7 @@ def optimize_method2protein(con, schema):
         """.format(schema)
     )
 
-    con.optimize_table(schema, "METHOD2PROTEIN", cascade=True)
+    con.optimise_table(schema, "METHOD2PROTEIN", cascade=True)
     con.grant("SELECT", schema, "METHOD2PROTEIN", "INTERPRO_SELECT")
 
 
@@ -1537,7 +1537,7 @@ def load_description_counts(con, schema, organisers):
         NOLOGGING
         """.format(schema)
     )
-    con.optimize_table(schema, "METHOD_DESC", cascade=True)
+    con.optimise_table(schema, "METHOD_DESC", cascade=True)
     con.grant("SELECT", schema, "METHOD_DESC", "INTERPRO_SELECT")
 
 
@@ -1608,7 +1608,7 @@ def load_taxonomy_counts(con, schema, organisers):
         NOLOGGING
         """.format(schema)
     )
-    con.optimize_table(schema, "METHOD_TAXA", cascade=True)
+    con.optimise_table(schema, "METHOD_TAXA", cascade=True)
     con.grant("SELECT", schema, "METHOD_TAXA", "INTERPRO_SELECT")
 
 

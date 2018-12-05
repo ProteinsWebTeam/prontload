@@ -17,7 +17,7 @@ def load_annotations(dsn, schema):
             EVIDENCE VARCHAR2(100) NOT NULL,
             REF_DB_CODE VARCHAR2(10),
             REF_DB_ID VARCHAR2(60)
-        ) NOLOGGING        
+        ) NOLOGGING
         """.format(schema)
     )
 
@@ -47,24 +47,24 @@ def load_annotations(dsn, schema):
 
     con.execute(
         """
-        CREATE INDEX I_PROTEIN2GO$P$G 
+        CREATE INDEX I_PROTEIN2GO$P$G
         ON {}.PROTEIN2GO (PROTEIN_AC, GO_ID) NOLOGGING
         """.format(schema)
     )
     con.execute(
         """
-        CREATE INDEX I_PROTEIN2GO$E 
+        CREATE INDEX I_PROTEIN2GO$E
         ON {}.PROTEIN2GO (EVIDENCE) NOLOGGING
         """.format(schema)
     )
     con.execute(
         """
-        CREATE INDEX I_PROTEIN2GO$RC 
+        CREATE INDEX I_PROTEIN2GO$RC
         ON {}.PROTEIN2GO (REF_DB_CODE) NOLOGGING
         """.format(schema)
     )
 
-    con.optimize_table(schema, "PROTEIN2GO", cascade=True)
+    con.optimise_table(schema, "PROTEIN2GO", cascade=True)
     con.grant("SELECT", schema, "PROTEIN2GO", "INTERPRO_SELECT")
 
 
@@ -78,7 +78,7 @@ def load_publications(dsn, schema):
             ID VARCHAR2(25) NOT NULL,
             TITLE VARCHAR2(1500),
             FIRST_PUBLISHED_DATE DATE
-        ) NOLOGGING        
+        ) NOLOGGING
         """.format(schema)
     )
 
@@ -109,7 +109,7 @@ def load_publications(dsn, schema):
         """.format(schema)
     )
 
-    con.optimize_table(schema, "PUBLICATION", cascade=True)
+    con.optimise_table(schema, "PUBLICATION", cascade=True)
     con.grant("SELECT", schema, "PUBLICATION", "INTERPRO_SELECT")
 
 
@@ -126,7 +126,7 @@ def load_terms(dsn, schema):
             IS_OBSOLETE CHAR(1) NOT NULL ,
             DEFINITION VARCHAR2(4000),
             REPLACED_BY VARCHAR2(10)
-        ) NOLOGGING        
+        ) NOLOGGING
         """.format(schema)
     )
 
@@ -149,9 +149,9 @@ def load_terms(dsn, schema):
     con.execute(
         """
         ALTER TABLE {}.TERM
-        ADD CONSTRAINT PK_TERM PRIMARY KEY (GO_ID)        
+        ADD CONSTRAINT PK_TERM PRIMARY KEY (GO_ID)
         """.format(schema)
     )
 
-    con.optimize_table(schema, "TERM", cascade=True)
+    con.optimise_table(schema, "TERM", cascade=True)
     con.grant("SELECT", schema, "TERM", "INTERPRO_SELECT")

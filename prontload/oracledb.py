@@ -67,7 +67,7 @@ class Connection(object):
             WHERE
               UPPER(owner) = :1
             ORDER BY
-              table_name        
+              table_name
         """
         return map(lambda r: r[0], self.get(query, ownname))
 
@@ -78,9 +78,9 @@ class Connection(object):
         except cx_Oracle.DatabaseError as e:
             """
             From cx_Oracle documentation:
-            With cx_Oracle every exception object has exactly one argument 
+            With cx_Oracle every exception object has exactly one argument
                 in the `args` tuple.
-            This argument is a `cx_Oracle._Error` object 
+            This argument is a `cx_Oracle._Error` object
                 which has the following five read-only attributes.
 
             (http://cx-oracle.readthedocs.io/en/latest/module.html?highlight=DatabaseError)
@@ -92,8 +92,8 @@ class Connection(object):
                 return False
             elif _error.code == 54 and forgive_busy:
                 """
-                ORA-00054 
-                resource busy and acquire with NOWAIT specified 
+                ORA-00054
+                resource busy and acquire with NOWAIT specified
                     or timeout expired
                 """
                 return False
@@ -103,7 +103,7 @@ class Connection(object):
         else:
             return True
 
-    def optimize_table(self, ownname, tabname, cascade=False):
+    def optimise_table(self, ownname, tabname, cascade=False):
         if cascade:
             self.execute(
                 """
