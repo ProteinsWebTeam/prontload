@@ -740,7 +740,8 @@ def dump_proteins(dsn, schema, dst):
         for row in con.get(
                 """
                 SELECT
-                  P.PROTEIN_AC, P.LEN, P.DBCODE, D.DESC_ID, NVL(E.LEFT_NUMBER, 0)
+                  P.PROTEIN_AC, P.LEN, P.DBCODE, D.DESC_ID,
+                  NVL(E.LEFT_NUMBER, 0)
                 FROM {0}.PROTEIN P
                 INNER JOIN {0}.ETAXI E
                   ON P.TAX_ID = E.TAX_ID
