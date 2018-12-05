@@ -183,7 +183,8 @@ def cli():
     for name in ("databases", "comments", "enzymes", "annotations",
                  "publications", "terms", "matches"):
         s = steps[name]
-        group.append((name, s["func"], s["args"], s.get("kwargs", {})))
+        if s["run"]:
+            group.append((name, s["func"], s["args"], s.get("kwargs", {})))
 
     t_group = Thread(target=exec_functions, args=group)
     t_group.start()
