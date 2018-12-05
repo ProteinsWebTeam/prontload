@@ -1473,6 +1473,24 @@ def process_proteins(dsn, schema, proteins_src, matches_src, processes,
     dir = kwargs.get("dir")
     max_gap = kwargs.get("max_gap", 20)
 
+    con = Connection(dsn)
+    con.drop_table(schema, "METHOD2PROTEIN")
+    con.execute(
+        """
+        CREATE TABLE {}.METHOD2PROTEIN
+        (
+            METHOD_AC VARCHAR2(25) NOT NULL,
+            PROTEIN_AC VARCHAR2(15) NOT NULL,
+            DBCODE CHAR(1) NOT NULL,
+            MD5 VARCHAR(32) NOT NULL,
+            LEN NUMBER(5) NOT NULL,
+            LEFT_NUMBER NUMBER NOT NULL,
+            DESC_ID NUMBER(10) NOT NULL
+        ) NOLOGGING
+        """.format(schema)
+    )
+    con.close()
+
     processes = max(1, processes - 1)
     in_queue = Queue(maxsize=processes)
     out_queue = Queue()
