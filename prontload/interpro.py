@@ -67,6 +67,151 @@ def load_databases(dsn, schema):
     con.grant("SELECT", schema, "CV_DATABASE", "INTERPRO_SELECT")
 
 
+def load_matches(dsn, schema):
+    con = Connection(dsn)
+
+    # Dropping (if exists) and recreating table
+    con.drop_table(schema, "MATCH")
+    con.execute(
+        """
+        CREATE TABLE {}.MATCH
+        (
+            PROTEIN_AC VARCHAR2(15) NOT NULL,
+            METHOD_AC VARCHAR2(25) NOT NULL,
+            DBCODE CHAR(1) NOT NULL,
+            MODEL_AC VARCHAR2(25),
+            POS_FROM NUMBER(5) NOT NULL,
+            POS_TO NUMBER(5) NOT NULL,
+            FRAGMENTS VARCHAR2(200) DEFAULT NULL
+        ) NOLOGGING
+        """.format(schema)
+    )
+
+    """
+    Insert directly signature matches and MobiDB-lite matches
+    For some signature matches, the HMM model accession
+        is the signature accession itself: in such cases, use NULL
+    """
+    con.execute(
+        """
+        INSERT /*+APPEND*/ INTO {}.MATCH
+        SELECT
+          PROTEIN_AC,
+          METHOD_AC,
+          DBCODE,
+          CASE
+            WHEN MODEL_AC IS NOT NULL AND MODEL_AC != METHOD_AC
+            THEN MODEL_AC
+            ELSE NULL
+          END AS MODEL_AC,
+          POS_FROM,
+          POS_TO,
+          FRAGMENTS
+        FROM INTERPRO.MATCH
+        UNION ALL
+        SELECT
+          PROTEIN_AC,
+          METHOD_AC,
+          DBCODE,
+          NULL,
+          POS_FROM,
+          POS_TO,
+          NULL
+        FROM INTERPRO.FEATURE_MATCH
+        WHERE DBCODE = 'g'
+        """.format(schema)
+    )
+    con.commit()
+
+    # Finalizing table
+    con.execute(
+        """
+        CREATE INDEX I_MATCH$PROTEIN
+        ON {}.MATCH (PROTEIN_AC) NOLOGGING
+        """.format(schema)
+    )
+    con.execute(
+        """
+        CREATE INDEX I_MATCH$METHOD
+        ON {}.MATCH (METHOD_AC) NOLOGGING
+        """.format(schema)
+    )
+    con.execute(
+        """
+        CREATE INDEX I_MATCH$DBCODE
+        ON {}.MATCH (DBCODE) NOLOGGING
+        """.format(schema)
+    )
+    con.optimize_table(schema, "MATCH", cascade=True)
+    con.grant("SELECT", schema, "MATCH", "INTERPRO_SELECT")
+
+    # logging.info("MATCH table ready")
+    # methods = {}
+    # for method_acc, count in con.get(
+    #         """
+    #         SELECT METHOD_AC, COUNT(DISTINCT PROTEIN_AC)
+    #         FROM {}.MATCH
+    #         GROUP BY METHOD_AC
+    #         """.format(schema)
+    # ):
+    #     methods[method_acc] = count
+    #
+    # logging.info("protein count for {} signatures".format(len(methods)))
+    # queue.put(methods)
+
+
+def load_proteins(dsn, schema):
+    con = Connection(dsn)
+    con.drop_table(schema, "PROTEIN")
+    con.execute(
+        """
+        CREATE TABLE {}.PROTEIN
+        (
+            PROTEIN_AC VARCHAR2(15) NOT NULL,
+            NAME VARCHAR2(16) NOT NULL ,
+            DBCODE CHAR(1) NOT NULL,
+            LEN NUMBER(5) NOT NULL,
+            FRAGMENT CHAR(1) NOT NULL,
+            TAX_ID NUMBER(15)
+        ) NOLOGGING
+        """.format(schema)
+    )
+
+    con.execute(
+        """
+        INSERT /*+APPEND*/ INTO {}.PROTEIN (
+            PROTEIN_AC, NAME, DBCODE, LEN, FRAGMENT, TAX_ID
+        )
+        SELECT
+            PROTEIN_AC, NAME, DBCODE, LEN, FRAGMENT, TAX_ID
+        FROM INTERPRO.PROTEIN
+        """.format(schema)
+    )
+    con.commit()
+
+    con.execute(
+        """
+        ALTER TABLE {}.PROTEIN
+        ADD CONSTRAINT PK_PROTEIN PRIMARY KEY (PROTEIN_AC)
+        """.format(schema)
+    )
+    con.execute(
+        """
+        CREATE INDEX I_PROTEIN$DBCODE
+        ON {}.PROTEIN (DBCODE) NOLOGGING
+        """.format(schema)
+    )
+    con.execute(
+        """
+        CREATE INDEX I_PROTEIN$NAME
+        ON {}.PROTEIN (NAME) NOLOGGING
+        """.format(schema)
+    )
+
+    con.optimize_table(schema, "PROTEIN", cascade=True)
+    con.grant("SELECT", schema, "PROTEIN", "INTERPRO_SELECT")
+
+
 def load_signatures(dsn, schema):
     con = Connection(dsn)
     con.drop_table(schema, "METHOD")
@@ -228,58 +373,6 @@ def load_taxa(dsn, schema):
 
     con.optimize_table(schema, "LINEAGE", cascade=True)
     con.grant("SELECT", schema, "LINEAGE", "INTERPRO_SELECT")
-
-
-def load_proteins(dsn, schema):
-    con = Connection(dsn)
-    con.drop_table(schema, "PROTEIN")
-    con.execute(
-        """
-        CREATE TABLE {}.PROTEIN
-        (
-            PROTEIN_AC VARCHAR2(15) NOT NULL,
-            NAME VARCHAR2(16) NOT NULL ,
-            DBCODE CHAR(1) NOT NULL,
-            LEN NUMBER(5) NOT NULL,
-            FRAGMENT CHAR(1) NOT NULL,
-            TAX_ID NUMBER(15)
-        ) NOLOGGING
-        """.format(schema)
-    )
-
-    con.execute(
-        """
-        INSERT /*+APPEND*/ INTO {}.PROTEIN (
-            PROTEIN_AC, NAME, DBCODE, LEN, FRAGMENT, TAX_ID
-        )
-        SELECT
-            PROTEIN_AC, NAME, DBCODE, LEN, FRAGMENT, TAX_ID
-        FROM INTERPRO.PROTEIN
-        """.format(schema)
-    )
-    con.commit()
-
-    con.execute(
-        """
-        ALTER TABLE {}.PROTEIN
-        ADD CONSTRAINT PK_PROTEIN PRIMARY KEY (PROTEIN_AC)
-        """.format(schema)
-    )
-    con.execute(
-        """
-        CREATE INDEX I_PROTEIN$DBCODE
-        ON {}.PROTEIN (DBCODE) NOLOGGING
-        """.format(schema)
-    )
-    con.execute(
-        """
-        CREATE INDEX I_PROTEIN$NAME
-        ON {}.PROTEIN (NAME) NOLOGGING
-        """.format(schema)
-    )
-
-    con.optimize_table(schema, "PROTEIN", cascade=True)
-    con.grant("SELECT", schema, "PROTEIN", "INTERPRO_SELECT")
 
 
 def chunk_signatures(con, schema, size=1000):
@@ -639,99 +732,6 @@ class ProteinConsumer(Process):
                             overlaps[acc_1][acc_2] += o
 
 
-def load_matches(dsn, schema):
-    con = Connection(dsn)
-
-    # Dropping (if exists) and recreating table
-    con.drop_table(schema, "MATCH")
-    con.execute(
-        """
-        CREATE TABLE {}.MATCH
-        (
-            PROTEIN_AC VARCHAR2(15) NOT NULL,
-            METHOD_AC VARCHAR2(25) NOT NULL,
-            DBCODE CHAR(1) NOT NULL,
-            MODEL_AC VARCHAR2(25),
-            POS_FROM NUMBER(5) NOT NULL,
-            POS_TO NUMBER(5) NOT NULL,
-            FRAGMENTS VARCHAR2(200) DEFAULT NULL
-        ) NOLOGGING
-        """.format(schema)
-    )
-
-    """
-    Insert directly signature matches and MobiDB-lite matches
-    For some signature matches, the HMM model accession
-        is the signature accession itself: in such cases, use NULL
-    """
-    con.execute(
-        """
-        INSERT /*+APPEND*/ INTO {}.MATCH
-        SELECT
-          PROTEIN_AC,
-          METHOD_AC,
-          DBCODE,
-          CASE
-            WHEN MODEL_AC IS NOT NULL AND MODEL_AC != METHOD_AC
-            THEN MODEL_AC
-            ELSE NULL
-          END AS MODEL_AC,
-          POS_FROM,
-          POS_TO,
-          FRAGMENTS
-        FROM INTERPRO.MATCH
-        UNION ALL
-        SELECT
-          PROTEIN_AC,
-          METHOD_AC,
-          DBCODE,
-          NULL,
-          POS_FROM,
-          POS_TO,
-          NULL
-        FROM INTERPRO.FEATURE_MATCH
-        WHERE DBCODE = 'g'
-        """.format(schema)
-    )
-    con.commit()
-
-    # Finalizing table
-    con.execute(
-        """
-        CREATE INDEX I_MATCH$PROTEIN
-        ON {}.MATCH (PROTEIN_AC) NOLOGGING
-        """.format(schema)
-    )
-    con.execute(
-        """
-        CREATE INDEX I_MATCH$METHOD
-        ON {}.MATCH (METHOD_AC) NOLOGGING
-        """.format(schema)
-    )
-    con.execute(
-        """
-        CREATE INDEX I_MATCH$DBCODE
-        ON {}.MATCH (DBCODE) NOLOGGING
-        """.format(schema)
-    )
-    con.optimize_table(schema, "MATCH", cascade=True)
-    con.grant("SELECT", schema, "MATCH", "INTERPRO_SELECT")
-
-    # logging.info("MATCH table ready")
-    # methods = {}
-    # for method_acc, count in con.get(
-    #         """
-    #         SELECT METHOD_AC, COUNT(DISTINCT PROTEIN_AC)
-    #         FROM {}.MATCH
-    #         GROUP BY METHOD_AC
-    #         """.format(schema)
-    # ):
-    #     methods[method_acc] = count
-    #
-    # logging.info("protein count for {} signatures".format(len(methods)))
-    # queue.put(methods)
-
-
 def dump_proteins(dsn, schema, dst):
     with io.Store(dst) as store:
         con = Connection(dsn)
@@ -755,22 +755,6 @@ def dump_proteins(dsn, schema, dst):
                 logging.info("proteins: {:>12}".format(cnt))
 
         logging.info("proteins: {:>12}".format(cnt))
-
-
-def organise_matches(organiser: io.Organiser, in_queue: Queue,
-                     out_queue: Queue):
-    while True:
-        chunk = in_queue.get()
-        if chunk is None:
-            break
-
-        for accession, *match in chunk:
-            organiser.add(accession, match)
-
-        organiser.dump()
-
-    size = organiser.merge()
-    out_queue.put(size)
 
 
 def dump_matches(dsn, schema, processes, dst, dir=None, bucket_size=1000000,
@@ -880,46 +864,20 @@ def dump_matches(dsn, schema, processes, dst, dir=None, bucket_size=1000000,
         logging.info("store disk space: {} bytes".format(store.size))
 
 
-def _dump_matches(dsn, schema, dst):
-    with io.Store(dst) as store:
-        con = Connection(dsn)
-        cnt = 0
+def organise_matches(organiser: io.Organiser, in_queue: Queue,
+                     out_queue: Queue):
+    while True:
+        chunk = in_queue.get()
+        if chunk is None:
+            break
 
-        """
-        JOIN ETAXI and PROTEIN_DESC to be sure to dump *only* matches
-            on proteins dumped in dump_proteins()
-        """
-        for row in con.get(
-                """
-                SELECT
-                  MA.PROTEIN_AC,
-                  MA.METHOD_AC,
-                  MA.DBCODE,
-                  ME.SIG_TYPE,
-                  MA.POS_FROM,
-                  MA.POS_TO,
-                  MA.FRAGMENTS
-                FROM INTERPRO.MATCH MA
-                  INNER JOIN {0}.METHOD ME
-                    ON MA.METHOD_AC = ME.METHOD_AC
-                WHERE MA.PROTEIN_AC IN (
-                  SELECT P.PROTEIN_AC
-                  FROM {0}.PROTEIN P
-                  INNER JOIN {0}.ETAXI E
-                    ON P.TAX_ID = E.TAX_ID
-                  INNER JOIN {0}.PROTEIN_DESC D
-                    ON P.PROTEIN_AC = D.PROTEIN_AC
-                  WHERE P.FRAGMENT = 'N'
-                )
-                ORDER BY MA.PROTEIN_AC
-                """.format(schema)
-        ):
-            store.add(row)
-            cnt += 1
-            if not cnt % 100000000:
-                logging.info("matches: {:>12}".format(cnt))
+        for accession, *match in chunk:
+            organiser.add(accession, match)
 
-        logging.info("matches: {:>12}".format(cnt))
+        organiser.dump()
+
+    size = organiser.merge()
+    out_queue.put(size)
 
 
 def _process_proteins(con, dsn, schema, organisers, store, max_gap,
