@@ -298,7 +298,7 @@ def cli():
 
         """
         On the following calls:
-            log message only once the task is accepted in the queue
+            log message only after the task is accepted in the queue
             so we never log something way before it actually starts
         """
         q.put((interpro.calculate_similarities, (dsn, schema, rc, ro)))
