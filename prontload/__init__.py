@@ -14,8 +14,9 @@ logging.basicConfig(
 
 def exec_functions(*iterable):
     for name, func, args, kwargs in iterable:
-        logging.info("running '{}'".format(name))
+        logging.info("{<20:}running".format(name))
         func(*args, **kwargs)
+        logging.info("{<20:}done".format(name))
 
 
 def exec_function(queue):
@@ -183,9 +184,10 @@ def cli():
             step["run"] = not step.get("skip", False)
 
     if steps["clear"]["run"]:
-        logging.info("running 'clear'")
+        logging.info("{<20:}running".format("run"))
         s = steps["clear"]
         s["func"](*s["args"], **s.get("kwargs", {}))
+        logging.info("{<20:}done".format("run"))
 
     # Start background steps in separate thread
     group = []
@@ -201,12 +203,13 @@ def cli():
     for name in ("synonyms", "signatures", "taxa"):
         s = steps[name]
         if s["run"]:
-            logging.info("running '{}'".format(name))
+            logging.info("{<20:}running".format(name))
             s["func"](*s["args"], **s.get("kwargs", {}))
+            logging.info("{<20:}done".format(name))
 
     s = steps["proteins"]
     if s["run"]:
-        logging.info("running 'proteins'")
+        logging.info("{<20:}running".format("proteins"))
         t_proteins = Thread(target=s["func"], args=s["args"],
                             kwargs=s.get("kwargs", {}))
     else:
@@ -215,7 +218,7 @@ def cli():
 
     s = steps["descriptions"]
     if s["run"]:
-        logging.info("running 'descriptions'")
+        logging.info("{<20:}running".format("descriptions"))
         p_descriptions = mp.Process(target=s["func"], args=s["args"],
                                     kwargs=s.get("kwargs", {}))
     else:
@@ -224,6 +227,7 @@ def cli():
 
     # Wait until proteins are loaded in Oracle
     t_proteins.join()
+    logging.info("{<20:}done".format("proteins"))
 
     s = steps["predictions"]
     if s["run"]:
@@ -242,6 +246,7 @@ def cli():
 
         # Then wait until descriptions are loaded
         p_descriptions.join()
+        logging.info("{<20:}done".format("descriptions"))
 
         # When descriptions are loaded, we can export proteins
         logging.info("exporting proteins")
@@ -322,13 +327,15 @@ def cli():
         t_method2proteins.join()
     else:
         p_descriptions.join()
+        logging.info("{<20:}done".format("descriptions"))
 
     t_group.join()
 
     for name in ("report", "copy"):
         s = steps[name]
         if s["run"]:
-            logging.info("running '{}'".format(name))
+            logging.info("{<20:}running".format(name))
             s["func"](*s["args"], **s.get("kwargs", {}))
+            logging.info("{<20:}done".format(name))
 
     logging.info("complete")
