@@ -5,7 +5,6 @@ import bisect
 import hashlib
 import heapq
 import logging
-import os
 import time
 from multiprocessing import Process, Queue
 from typing import Tuple
@@ -98,27 +97,19 @@ def load_matches(dsn, schema):
         """
         INSERT /*+APPEND*/ INTO {}.MATCH
         SELECT
-          PROTEIN_AC,
-          METHOD_AC,
-          DBCODE,
+          PROTEIN_AC, METHOD_AC, DBCODE,
           CASE
             WHEN MODEL_AC IS NOT NULL AND MODEL_AC != METHOD_AC
             THEN MODEL_AC
             ELSE NULL
           END AS MODEL_AC,
-          POS_FROM,
-          POS_TO,
-          FRAGMENTS
+          POS_FROM, POS_TO, FRAGMENTS
         FROM INTERPRO.MATCH
         UNION ALL
         SELECT
-          PROTEIN_AC,
-          METHOD_AC,
-          DBCODE,
+          PROTEIN_AC, METHOD_AC, DBCODE,
           NULL,
-          POS_FROM,
-          POS_TO,
-          NULL
+          POS_FROM, POS_TO, NULL
         FROM INTERPRO.FEATURE_MATCH
         WHERE DBCODE = 'g'
         """.format(schema)
@@ -159,7 +150,6 @@ def load_matches(dsn, schema):
         """.format(schema)
     )
     con.commit()
-    cur.close()
 
 
 def load_proteins(dsn, schema):
@@ -804,13 +794,8 @@ def dump_matches(dsn, schema, processes, dst, dir=None, bucket_size=1000000,
     for row in con.get(
             """
             SELECT
-              MA.PROTEIN_AC,
-              MA.METHOD_AC,
-              MA.DBCODE,
-              ME.SIG_TYPE,
-              MA.POS_FROM,
-              MA.POS_TO,
-              MA.FRAGMENTS
+              MA.PROTEIN_AC, MA.METHOD_AC, MA.DBCODE, ME.SIG_TYPE,
+              MA.POS_FROM, MA.POS_TO, MA.FRAGMENTS
             FROM INTERPRO.MATCH MA
               INNER JOIN {0}.METHOD ME
                 ON MA.METHOD_AC = ME.METHOD_AC
