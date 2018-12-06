@@ -186,8 +186,6 @@ def load_descriptions(dsn, schema, tmpdir=None, chunk_size=100000):
                 "proteins": proteins
             })
 
-        logging.info("temporary file: {:,} bytes".format(store.size))
-
         desc_id = 1
         cv_table = []
         rel_table = []
@@ -223,6 +221,10 @@ def load_descriptions(dsn, schema, tmpdir=None, chunk_size=100000):
                 rel_table = []
 
             desc_id += 1
+
+        logging.info("{:<20}temporary disk space: {:,} bytes".format(
+            "descriptions", store.size
+        ))
 
     if cv_table:
         con.executemany(
