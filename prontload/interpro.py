@@ -1229,6 +1229,7 @@ def make_predictions(dsn, schema, signatures, comparisons):
 
 
 def calculate_similarities(dsn, schema, coverages, overlaps):
+    con = Connection(dsn)
     con.drop_table(schema, "METHOD_SIMILARITY")
     con.execute(
         """
