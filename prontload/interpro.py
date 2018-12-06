@@ -856,12 +856,35 @@ def dump_matches(dsn, schema, processes, dst, dir=None, bucket_size=1000000,
 
     logging.info("organisers disk space: {} bytes".format(size))
 
-    with io.Store(dst) as store:
-        for o in organisers:
-            for protein_acc, matches in o:
-                store.add((protein_acc, matches))
+    q = Queue(maxsize=10)
+    p = Process(target=feed_store, args=(dst, q))
+    p.start()
+    chunk = []
+    chunk_size = 10000
 
-            o.remove()
+    for organiser in organisers:
+        for item in organiser:
+            chunk.append(item)
+            if len(chunk) == chunk_size:
+                q.put(chunk)
+                chunk = []
+
+        organiser.remove()
+
+    q.put(chunk)
+    q.put(None)
+    p.join()
+
+
+def feed_store(dst: str, queue: Queue):
+    with io.Store(dst) as store:
+        while True:
+            chunk = queue.get()
+            if chunk is None:
+                break
+
+            for item in chunk:
+                store.add(item)
 
         logging.info("store disk space: {} bytes".format(store.size))
 
