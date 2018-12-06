@@ -260,7 +260,7 @@ def cli():
         # Once both exports are completed, we can process proteins
         logging.info("processing proteins")
         res = interpro.process_proteins(dsn, schema, proteins_f, matches_f,
-                                        args.processes, dir=args.dir,
+                                        args.processes, dir=args.tmpdir,
                                         max_gap=max_gap)
         """
         s: dict, number of proteins and matches for each signatures
