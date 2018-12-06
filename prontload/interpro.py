@@ -19,6 +19,7 @@ BULK_INSERT_SIZE = 100000
 
 def create_synonyms(dsn, src, dst):
     tables = (
+        "CV_ENTRY_TYPE",
         "ENTRY",
         "ENTRY2METHOD",
         "ENTRY2ENTRY",
