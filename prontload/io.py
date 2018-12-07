@@ -2,15 +2,16 @@
 # -*- coding: utf-8 -*-
 
 import bisect
-import gzip
 import os
 import pickle
+from io import BufferedReader, BufferedWriter
+from gzip import GzipFile
 from tempfile import mkdtemp, mkstemp
 from typing import Optional
 
 
 class Organiser(object):
-    def __init__(self, keys, path=None, dir=None, compress=True):
+    def __init__(self, keys, path=None, dir=None):
         self.keys = keys
 
         if path is None:
@@ -18,8 +19,6 @@ class Organiser(object):
         else:
             self.path = path
             os.makedirs(self.path, exist_ok=True)
-
-        self.open = gzip.open if compress else open
 
         self.buckets = [
             {
@@ -31,7 +30,7 @@ class Organiser(object):
 
     def __iter__(self):
         for b in self.buckets:
-            with self.open(b["path"], "rb") as fh:
+            with BufferedReader(GzipFile(b["path"], "rb")) as fh:
                 while True:
                     try:
                         k, v = pickle.load(fh)
@@ -58,7 +57,7 @@ class Organiser(object):
     def dump(self):
         for b in self.buckets:
             if b["data"]:
-                with self.open(b["path"], "ab") as fh:
+                with BufferedWriter(GzipFile(b["path"], "ab")) as fh:
                     pickle.dump(b["data"], fh)
                 b["data"] = {}
 
@@ -70,7 +69,7 @@ class Organiser(object):
             data = {}
             if os.path.isfile(b["path"]):
                 size_before += os.path.getsize(b["path"])
-                with self.open(b["path"], "rb") as fh:
+                with BufferedReader(GzipFile(b["path"], "rb")) as fh:
                     while True:
                         try:
                             chunk = pickle.load(fh)
@@ -83,7 +82,7 @@ class Organiser(object):
                                 else:
                                     data[key] = value
 
-            with self.open(b["path"], "wb") as fh:
+            with BufferedWriter(GzipFile(b["path"], "wb")) as fh:
                 for key in sorted(data):
                     pickle.dump((key, data[key]), fh)
 
@@ -102,15 +101,15 @@ class Store(object):
         if path:
             self.path = path
             if os.path.isfile(self.path):
-                self.fh = gzip.open(self.path, "rb")
+                self.fh = BufferedReader(GzipFile(self.path, "rb"))
             else:
-                self.fh = gzip.open(self.path, "wb")
+                self.fh = BufferedWriter(GzipFile(self.path, "wb"))
             self.delete_on_close = False
         else:
             fd, self.path = mkstemp(dir=dir)
             os.close(fd)
             os.remove(self.path)
-            self.fh = gzip.open(self.path, "wb")
+            self.fh = BufferedWriter(GzipFile(self.path, "wb"))
             self.delete_on_close = True
 
     def __enter__(self):
@@ -126,7 +125,7 @@ class Store(object):
 
     def __iter__(self):
         self.close()
-        self.fh = gzip.open(self.path, "rb")
+        self.fh = BufferedReader(GzipFile(self.path, "rb"))
         return self
 
     def __next__(self):
