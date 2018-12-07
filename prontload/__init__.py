@@ -184,10 +184,10 @@ def cli():
             step["run"] = not step.get("skip", False)
 
     if steps["clear"]["run"]:
-        logging.info("{:<20}running".format("run"))
+        logging.info("{:<20}running".format("clear"))
         s = steps["clear"]
         s["func"](*s["args"], **s.get("kwargs", {}))
-        logging.info("{:<20}done".format("run"))
+        logging.info("{:<20}done".format("clear"))
 
     # Start background steps in separate thread
     group = []
