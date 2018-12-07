@@ -842,35 +842,12 @@ def dump_matches(dsn, schema, processes, dst, dir=None, bucket_size=1000000,
 
     logging.info("organisers disk space: {} bytes".format(size))
 
-    q = Queue(maxsize=10)
-    p = Process(target=feed_store, args=(dst, q))
-    p.start()
-    chunk = []
-    chunk_size = 10000
-
-    for organiser in organisers:
-        for item in organiser:
-            chunk.append(item)
-            if len(chunk) == chunk_size:
-                q.put(chunk)
-                chunk = []
-
-        organiser.remove()
-
-    q.put(chunk)
-    q.put(None)
-    p.join()
-
-
-def feed_store(dst: str, queue: Queue):
     with io.Store(dst) as store:
-        while True:
-            chunk = queue.get()
-            if chunk is None:
-                break
-
-            for item in chunk:
+        for organiser in organisers:
+            for item in organiser:
                 store.add(item)
+
+            organiser.remove()
 
         logging.info("store disk space: {} bytes".format(store.size))
 
