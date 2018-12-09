@@ -1492,9 +1492,9 @@ def process_proteins(dsn, schema, proteins_src, matches_src, processes,
     cnt = 0
     ts = time.time()
     with io.Store(proteins_src) as proteins, io.Store(matches_src) as matches:
+        _acc = None
         for acc, length, protein_dbcode, desc_id, left_num in proteins:
-            _acc, _matches = next(matches)
-            while _acc < acc:
+            while _acc is None or _acc < acc:
                 _acc, _matches = next(matches)
 
             if _acc != acc:
