@@ -212,22 +212,23 @@ def cli():
         logging.info("{:<20}running".format("proteins"))
         t_proteins = Thread(target=s["func"], args=s["args"],
                             kwargs=s.get("kwargs", {}))
+        t_proteins.start()
     else:
-        t_proteins = Thread()
-    t_proteins.start()
+        t_proteins = None
 
     s = steps["descriptions"]
     if s["run"]:
         logging.info("{:<20}running".format("descriptions"))
         p_descriptions = mp.Process(target=s["func"], args=s["args"],
                                     kwargs=s.get("kwargs", {}))
+        p_descriptions.start()
     else:
-        p_descriptions = mp.Process()
-    p_descriptions.start()
+        p_descriptions = None
 
     # Wait until proteins are loaded in Oracle
-    t_proteins.join()
-    logging.info("{:<20}done".format("proteins"))
+    if t_proteins:
+        t_proteins.join()
+        logging.info("{:<20}done".format("proteins"))
 
     s = steps["predictions"]
     if s["run"]:
@@ -244,9 +245,10 @@ def cli():
                                  args.tmpdir))
         t_matches.start()
 
-        # Then wait until descriptions are loaded
-        p_descriptions.join()
-        logging.info("{:<20}done".format("descriptions"))
+        if p_descriptions:
+            # Then wait until descriptions are loaded
+            p_descriptions.join()
+            logging.info("{:<20}done".format("descriptions"))
 
         # When descriptions are loaded, we can export proteins
         logging.info("exporting proteins")
@@ -325,7 +327,7 @@ def cli():
             p.join()
 
         t_method2proteins.join()
-    else:
+    elif p_descriptions:
         p_descriptions.join()
         logging.info("{:<20}done".format("descriptions"))
 
