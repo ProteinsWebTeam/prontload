@@ -7,19 +7,13 @@ import pickle
 from io import BufferedReader, BufferedWriter
 from gzip import GzipFile
 from tempfile import mkdtemp, mkstemp
-from typing import Optional
+from typing import Generator, Iterable, List, Optional, Tuple
 
 
 class Organiser(object):
-    def __init__(self, keys, path=None, dir=None):
+    def __init__(self, keys: Iterable, dir: Optional[str]=None):
         self.keys = keys
-
-        if path is None:
-            self.path = mkdtemp(dir=dir)
-        else:
-            self.path = path
-            os.makedirs(self.path, exist_ok=True)
-
+        self.path = mkdtemp(dir=dir)
         self.buckets = [
             {
                 "path": os.path.join(self.path, str(i+1)),
@@ -40,8 +34,17 @@ class Organiser(object):
                         yield k, v
 
     @property
-    def size(self):
-        return len(self.buckets)
+    def size(self) -> int:
+        size = 0
+        for b in self.buckets:
+            try:
+                s = os.path.getsize(b["path"])
+            except FileNotFoundError:
+                continue
+            else:
+                size += s
+
+        return size
 
     def add(self, key, value):
         i = bisect.bisect_right(self.keys, key)
@@ -61,38 +64,39 @@ class Organiser(object):
                     pickle.dump(b["data"], fh)
                 b["data"] = {}
 
-    def merge(self):
-        size_before = 0
-        size_after = 0
+    @staticmethod
+    def merge_bucket(bucket: dict, as_list: bool=False):
+        data = {}
+        if os.path.isfile(b["path"]):
+            with BufferedReader(GzipFile(b["path"], "rb")) as fh:
+                while True:
+                    try:
+                        chunk = pickle.load(fh)
+                    except EOFError:
+                        break
+                    else:
+                        for key, value in chunk.items():
+                            if key in data:
+                                data[key] += value
+                            else:
+                                data[key] = value
 
+        if as_list:
+            return [(key, data[key]) for key in sorted(data)]
+        else:
+            return data
+
+    def merge(self, as_list: bool=False) -> Generator[dict, None, None]:
         for b in self.buckets:
-            data = {}
-            if os.path.isfile(b["path"]):
-                size_before += os.path.getsize(b["path"])
-                with BufferedReader(GzipFile(b["path"], "rb")) as fh:
-                    while True:
-                        try:
-                            chunk = pickle.load(fh)
-                        except EOFError:
-                            break
-                        else:
-                            for key, value in chunk.items():
-                                if key in data:
-                                    data[key] += value
-                                else:
-                                    data[key] = value
-
-            with BufferedWriter(GzipFile(b["path"], "wb")) as fh:
-                for key in sorted(data):
-                    pickle.dump((key, data[key]), fh)
-
-            size_after += os.path.getsize(b["path"])
-
-        return max(size_before, size_after)
+            yield self.merge_bucket(b, as_list)
 
     def remove(self):
         for b in self.buckets:
-            os.remove(b["path"])
+            try:
+                os.remove(b["path"])
+            except FileNotFoundError:
+                pass
+
         os.rmdir(self.path)
 
 

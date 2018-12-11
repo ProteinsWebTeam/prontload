@@ -6,7 +6,7 @@ import hashlib
 import heapq
 import logging
 import time
-from multiprocessing import Process, Queue
+from multiprocessing import Pool, Process, Queue
 from typing import Tuple
 
 from . import io
@@ -769,7 +769,6 @@ def dump_matches(dsn, schema, processes, dst, dir=None, bucket_size=1000000,
         else:
             i += 1
 
-    out_queue = Queue()
     processes = max(1, processes - 1)
     organisers = []
     queues = []
@@ -780,7 +779,7 @@ def dump_matches(dsn, schema, processes, dst, dir=None, bucket_size=1000000,
     for i in range(0, len(keys), step):
         o = io.Organiser(keys[i:i+step], dir=dir)
         q = Queue(maxsize=1)
-        w = Process(target=organise_matches, args=(o, q, out_queue))
+        w = Process(target=organise_matches, args=(o, q))
         w.start()
         organisers.append(o)
         queues.append(q)
@@ -834,26 +833,27 @@ def dump_matches(dsn, schema, processes, dst, dir=None, bucket_size=1000000,
 
     logging.info("matches: {:>12}".format(cnt))
 
-    # Get temporary space used by each organiser
-    size = sum([out_queue.get() for _ in workers])
-
     for w in workers:
         w.join()
 
+    # Get temporary space used by each organiser
+    size = sum([o.size for o in organisers])
     logging.info("organisers disk space: {} bytes".format(size))
 
-    with io.Store(dst) as store:
-        for organiser in organisers:
-            for item in organiser:
+    with io.Store(dst) as store, Pool(processes) as pool:
+        iterable = [(b, True) for o in organisers for b in o.buckets]
+        for items in pool.imap(merge_bucket, iterable):
+            for item in items:
                 store.add(item)
-
-            organiser.remove()
 
         logging.info("store disk space: {} bytes".format(store.size))
 
 
-def organise_matches(organiser: io.Organiser, in_queue: Queue,
-                     out_queue: Queue):
+def merge_bucket(args):
+    return io.Organiser.merge_bucket(*args)
+
+
+def organise_matches(organiser: io.Organiser, in_queue: Queue):
     while True:
         chunk = in_queue.get()
         if chunk is None:
@@ -863,9 +863,6 @@ def organise_matches(organiser: io.Organiser, in_queue: Queue,
             organiser.add(accession, match)
 
         organiser.dump()
-
-    size = organiser.merge()
-    out_queue.put(size)
 
 
 def make_predictions(dsn, schema, signatures, comparisons):
