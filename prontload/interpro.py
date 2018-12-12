@@ -750,7 +750,7 @@ def dump_proteins(dsn, schema, dst):
         logging.info("proteins: {:>12}".format(cnt))
 
 
-def dump_matches(dsn, schema, processes, dst, dir=None, bucket_size=1000000,
+def dump_matches(dsn, schema, processes, dst, dir=None, bucket_size=100000,
                  buffer_size=1000000):
     con = Connection(dsn)
     i = bucket_size
