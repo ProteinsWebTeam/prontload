@@ -67,8 +67,8 @@ class Organiser(object):
     @staticmethod
     def merge_bucket(bucket: dict, as_list: bool=False):
         data = {}
-        if os.path.isfile(b["path"]):
-            with BufferedReader(GzipFile(b["path"], "rb")) as fh:
+        if os.path.isfile(bucket["path"]):
+            with BufferedReader(GzipFile(bucket["path"], "rb")) as fh:
                 while True:
                     try:
                         chunk = pickle.load(fh)
