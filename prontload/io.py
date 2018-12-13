@@ -2,10 +2,9 @@
 # -*- coding: utf-8 -*-
 
 import bisect
+import gzip
 import os
 import pickle
-from io import BufferedReader, BufferedWriter
-from gzip import GzipFile
 from tempfile import mkdtemp, mkstemp
 from typing import Generator, List, Optional
 
@@ -24,7 +23,7 @@ class Organiser(object):
 
     def __iter__(self):
         for b in self.buckets:
-            with BufferedReader(GzipFile(b["path"], "rb")) as fh:
+            with gzip.open(b["path"], "rb") as fh:
                 while True:
                     try:
                         k, v = pickle.load(fh)
@@ -60,7 +59,7 @@ class Organiser(object):
     def dump(self):
         for b in self.buckets:
             if b["data"]:
-                with BufferedWriter(GzipFile(b["path"], "ab")) as fh:
+                with gzip.open(b["path"], "ab") as fh:
                     pickle.dump(b["data"], fh)
                 b["data"] = {}
 
@@ -68,7 +67,7 @@ class Organiser(object):
     def merge_bucket(bucket: dict, as_list: bool=False):
         data = {}
         if os.path.isfile(bucket["path"]):
-            with BufferedReader(GzipFile(bucket["path"], "rb")) as fh:
+            with gzip.open(bucket["path"], "rb") as fh:
                 while True:
                     try:
                         chunk = pickle.load(fh)
@@ -100,36 +99,46 @@ class Organiser(object):
         os.rmdir(self.path)
 
 
+def merge_bucket(in_queue, out_queue, dir=None):
+    while True:
+        task = in_queue.get()
+        if task is None:
+            break
+
+        i, bucket = task
+        items = Organiser.merge_bucket(bucket, as_list=True)
+        fd, path = mkstemp(dir=dir)
+        os.close(fd)
+
+        with open(path, "wb") as fh:
+            for item in items:
+                pickle.dump(item, fh)
+
+        out_queue.put((i, path))
+
+
 class Store(object):
-    def __init__(self, path: Optional[str]=None, dir=None):
-        if path:
-            self.path = path
-            if os.path.isfile(self.path):
-                self.fh = BufferedReader(GzipFile(self.path, "rb"))
-            else:
-                self.fh = BufferedWriter(GzipFile(self.path, "wb"))
-            self.delete_on_close = False
+    def __init__(self, path: str, write: bool=False, gz: bool=False):
+        self.path = path
+        self.open = gzip.open if gz else open
+
+        if write:
+            self.fh = self.open(self.path, "wb")
         else:
-            fd, self.path = mkstemp(dir=dir)
-            os.close(fd)
-            os.remove(self.path)
-            self.fh = BufferedWriter(GzipFile(self.path, "wb"))
-            self.delete_on_close = True
+            self.fh = self.open(self.path, "rb")
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
-        self.remove()
 
     def __del__(self):
         self.close()
-        self.remove()
 
     def __iter__(self):
         self.close()
-        self.fh = BufferedReader(GzipFile(self.path, "rb"))
+        self.fh = self.open(self.path, "rb")
         return self
 
     def __next__(self):
@@ -144,18 +153,22 @@ class Store(object):
     def size(self):
         try:
             return os.path.getsize(self.path)
-        except (FileNotFoundError, TypeError):
+        except FileNotFoundError:
             return 0
 
     def add(self, obj):
         pickle.dump(obj, self.fh)
 
+    def writefile(self, path: str):
+        with open(path, "rb") as fh:
+            self.fh.write(fh.read())
+        os.remove(path)
+
     def close(self):
-        if self.fh is not None:
-            self.fh.close()
-            self.fh = None
+        self.fh.close()
 
     def remove(self):
-        if self.path is not None and self.delete_on_close:
+        try:
             os.remove(self.path)
-            self.path = None
+        except FileNotFoundError:
+            pass

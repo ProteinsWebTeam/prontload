@@ -6,7 +6,7 @@ import hashlib
 import heapq
 import logging
 import time
-from multiprocessing import Pool, Process, Queue
+from multiprocessing import Process, Queue
 from typing import Tuple
 
 from . import io
@@ -725,7 +725,7 @@ class ProteinConsumer(Process):
 
 
 def dump_proteins(dsn, schema, dst):
-    with io.Store(dst) as store:
+    with io.Store(dst, write=True, gz=True) as store:
         con = Connection(dsn)
         cnt = 0
         for row in con.get(
@@ -769,7 +769,8 @@ def dump_matches(dsn, schema, processes, dst, dir=None, bucket_size=100000,
         else:
             i += 1
 
-    processes = max(1, processes - 1)
+    processes = max(1, processes - 1)  # parent process
+
     organisers = []
     queues = []
     workers = []
@@ -831,26 +832,80 @@ def dump_matches(dsn, schema, processes, dst, dir=None, bucket_size=100000,
         q.put(c)
         q.put(None)
 
+    for w in workers:
+        w.join()
+
     logging.info("matches: {:>12}".format(cnt))
+
+    # Get temporary space used by each organiser
+    size = sum([o.size for o in organisers])
+
+    # Merge organisers and write items to store
+    in_queue = Queue()
+    # To avoid having too many temporary files waiting to be copied
+    out_queue = Queue(maxsize=1)
+
+    workers = []
+    for _ in range(processes):
+        w = Process(target=io.merge_bucket, args=(in_queue, out_queue, dir))
+        w.start()
+        workers.append(w)
+
+    writer = Process(target=fill_store, args=(dst, out_queue))
+    writer.start()
+
+    i = 0
+    for o in organisers:
+        for b in o.buckets:
+            in_queue.put((i, b))
+            i += 1
+
+    for _ in workers:
+        in_queue.put(None)
 
     for w in workers:
         w.join()
 
-    # Get temporary space used by each organiser
-    size = sum([o.size for o in organisers])
-    logging.info("organisers disk space: {} bytes".format(size))
+    for o in organisers:
+        o.remove()
 
-    with io.Store(dst) as store, Pool(processes) as pool:
-        iterable = [(b, True) for o in organisers for b in o.buckets]
-        for items in pool.imap(merge_bucket, iterable):
-            for item in items:
-                store.add(item)
+    out_queue.put(None)
+    writer.join()
 
-        logging.info("store disk space: {} bytes".format(store.size))
+    with io.Store(dst, gz=False) as store:
+        size += store.size
+
+    logging.info("temporary disk space: {:,} bytes".format(size))
 
 
-def merge_bucket(args):
-    return io.Organiser.merge_bucket(*args)
+def fill_store(dst: str, queue: Queue):
+    with io.Store(dst, write=True, gz=False) as store:
+        data = {}
+        index = 0
+
+        while True:
+            result = queue.get()
+            if result is None:
+                break
+
+            i, path = result
+            if i == index:
+                store.writefile(path)
+                index += 1
+
+                while True:
+                    try:
+                        path = data.pop(index)
+                    except KeyError:
+                        break
+                    else:
+                        store.writefile(path)
+                        index += 1
+            else:
+                data[i] = path
+
+        for i in sorted(data):
+            store.writefile(data[i])
 
 
 def organise_matches(organiser: io.Organiser, in_queue: Queue):
