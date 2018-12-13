@@ -7,11 +7,11 @@ import pickle
 from io import BufferedReader, BufferedWriter
 from gzip import GzipFile
 from tempfile import mkdtemp, mkstemp
-from typing import Generator, Iterable, List, Optional, Tuple
+from typing import Generator, List, Optional
 
 
 class Organiser(object):
-    def __init__(self, keys: Iterable, dir: Optional[str]=None):
+    def __init__(self, keys: List, dir: Optional[str]=None):
         self.keys = keys
         self.path = mkdtemp(dir=dir)
         self.buckets = [
