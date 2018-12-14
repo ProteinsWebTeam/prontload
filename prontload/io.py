@@ -118,14 +118,13 @@ def merge_bucket(in_queue, out_queue, dir=None):
 
 
 class Store(object):
-    def __init__(self, path: str, write: bool=False, gz: bool=False):
+    def __init__(self, path: str, write: bool=False, compresslevel: int=9):
         self.path = path
-        self.open = gzip.open if gz else open
 
         if write:
-            self.fh = self.open(self.path, "wb")
+            self.fh = gzip.open(self.path, "wb", compresslevel)
         else:
-            self.fh = self.open(self.path, "rb")
+            self.fh = gzip.open(self.path, "rb")
 
     def __enter__(self):
         return self

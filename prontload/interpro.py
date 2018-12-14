@@ -725,7 +725,7 @@ class ProteinConsumer(Process):
 
 
 def dump_proteins(dsn, schema, dst):
-    with io.Store(dst, write=True, gz=True) as store:
+    with io.Store(dst, write=True) as store:
         con = Connection(dsn)
         cnt = 0
         for row in con.get(
@@ -751,7 +751,7 @@ def dump_proteins(dsn, schema, dst):
 
 
 def dump_matches(dsn, schema, processes, dst, dir=None, bucket_size=100000,
-                 buffer_size=1000000):
+                 buffer_size=1000000, compresslevel=9):
     con = Connection(dsn)
     i = bucket_size
     keys = []
@@ -851,7 +851,7 @@ def dump_matches(dsn, schema, processes, dst, dir=None, bucket_size=100000,
         w.start()
         workers.append(w)
 
-    writer = Process(target=fill_store, args=(dst, out_queue))
+    writer = Process(target=fill_store, args=(dst, out_queue, compresslevel))
     writer.start()
 
     i = 0
@@ -872,14 +872,14 @@ def dump_matches(dsn, schema, processes, dst, dir=None, bucket_size=100000,
     out_queue.put(None)
     writer.join()
 
-    with io.Store(dst, gz=False) as store:
+    with io.Store(dst) as store:
         size += store.size
 
     logging.info("temporary disk space: {:,} bytes".format(size))
 
 
-def fill_store(dst: str, queue: Queue):
-    with io.Store(dst, write=True, gz=False) as store:
+def fill_store(dst: str, queue: Queue, compresslevel:int):
+    with io.Store(dst, write=True, compresslevel=compresslevel) as store:
         data = {}
         index = 0
 
