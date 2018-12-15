@@ -242,7 +242,8 @@ def cli():
         logging.info("exporting matches")
         t_matches = Thread(target=interpro.dump_matches,
                            args=(dsn, schema, args.processes-1, matches_f,
-                                 args.tmpdir))
+                                 args.tmpdir),
+                           kwargs=dict(compresslevel=5))
         t_matches.start()
 
         if p_descriptions:
