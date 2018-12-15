@@ -748,6 +748,8 @@ def dump_proteins(dsn, schema, dst):
                 logging.info("proteins: {:>12}".format(cnt))
 
         logging.info("proteins: {:>12}".format(cnt))
+        logging.info("proteins: temporary disk space: "
+                     "{:,} bytes".format(store.size))
 
 
 def dump_matches(dsn, schema, processes, dst, dir=None, bucket_size=100000,
@@ -875,7 +877,7 @@ def dump_matches(dsn, schema, processes, dst, dir=None, bucket_size=100000,
     with io.Store(dst) as store:
         size += store.size
 
-    logging.info("temporary disk space: {:,} bytes".format(size))
+    logging.info("matches: temporary disk space: {:,} bytes".format(size))
 
 
 def fill_store(dst: str, queue: Queue, compresslevel:int):
