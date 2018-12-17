@@ -118,8 +118,16 @@ def merge_bucket(in_queue, out_queue, dir=None):
 
 
 class Store(object):
-    def __init__(self, path: str, write: bool=False, compresslevel: int=9):
-        self.path = path
+    def __init__(self, path: Optional[str]=None, write: bool=False,
+                 compresslevel: int=9, dir: Optional[str]=None):
+        if path:
+            self.path = path
+            self.temporary = False
+        else:
+            fd, self.path = mkstemp(dir=dir)
+            os.close(fd)
+            self.temporary = True
+            write = True
 
         if write:
             self.fh = gzip.open(self.path, "wb", compresslevel)
@@ -131,13 +139,17 @@ class Store(object):
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+        if self.temporary:
+            self.remove()
 
     def __del__(self):
         self.close()
+        if self.temporary:
+            self.remove()
 
     def __iter__(self):
         self.close()
-        self.fh = self.open(self.path, "rb")
+        self.fh = gzip.open(self.path, "rb")
         return self
 
     def __next__(self):
