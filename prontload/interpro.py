@@ -1508,6 +1508,100 @@ def load_taxonomy_counts(dsn, schema, organisers):
     con.grant("SELECT", schema, "METHOD_TAXA", "INTERPRO_SELECT")
 
 
+def process_proteins2(dsn, schema, processes, **kwargs):
+    chunk_size = kwargs.get("chunk_size", 10000)
+    dir = kwargs.get("dir")
+    max_gap = kwargs.get("max_gap", 20)
+
+    processes = max(1, processes - 1)
+    in_queue = Queue(maxsize=processes)
+    out_queue = Queue()
+    consumers = []
+    for _ in range(processes):
+        c = ProteinConsumer(dsn, schema, max_gap, in_queue, out_queue,
+                            dir=dir)
+        c.start()
+        consumers.append(c)
+
+    con = Connection(dsn)
+    con.drop_table(schema, "METHOD2PROTEIN")
+    con.execute(
+        """
+        CREATE TABLE {}.METHOD2PROTEIN
+        (
+            METHOD_AC VARCHAR2(25) NOT NULL,
+            PROTEIN_AC VARCHAR2(15) NOT NULL,
+            DBCODE CHAR(1) NOT NULL,
+            MD5 VARCHAR(32) NOT NULL,
+            LEN NUMBER(5) NOT NULL,
+            LEFT_NUMBER NUMBER NOT NULL,
+            DESC_ID NUMBER(10) NOT NULL
+        ) NOLOGGING
+        """.format(schema)
+    )
+
+    query = """
+        SELECT
+            P.PROTEIN_AC, P.LEN, P.DBCODE, D.DESC_ID,
+            NVL(E.LEFT_NUMBER, 0),
+            MA.METHOD_AC, MA.DBCODE, ME.SIG_TYPE,
+            MA.POS_FROM, MA.POS_TO, MA.FRAGMENTS
+        FROM {0}.PROTEIN P
+        INNER JOIN {0}.ETAXI E
+          ON P.TAX_ID = E.TAX_ID
+        INNER JOIN {0}.PROTEIN_DESC D
+          ON P.PROTEIN_AC = D.PROTEIN_AC
+        INNER JOIN INTERPRO.MATCH MA
+          ON P.PROTEIN_AC = MA.PROTEIN_AC
+        INNER JOIN {0}.METHOD ME
+          ON MA.METHOD_AC = ME.METHOD_AC
+        WHERE P.FRAGMENT = 'N'
+        ORDER BY P.PROTEIN_AC
+    """.format(schema)
+
+    _p_acc = None
+    chunk = []
+    cnt = 0
+    protein_matches = []
+    methods = {}
+    methods_fragments = {}
+    ts = time.time()
+    for row in con.get(query):
+        p_acc = row[0]
+        if p_acc != _p_acc:
+            if _p_acc:
+                chunk.append((_p_acc, p_dbcode, length, desc_id, left_num,
+                              protein_matches))
+
+                if len(chunk) == chunk_size:
+                    in_queue.put(chunk)
+                    chunk = []
+
+                protein_matches = []
+                methods = {}
+                methods_fragments = {}
+
+            p_length = row[1]
+            p_dbcode = row[2]
+            descr_id = row[3]
+            left_num = row[4]
+            _p_acc = p_acc
+            cnt += 1
+
+        method_acc = row[5]
+        m_dbcode = row[6]
+        m_type = row[7]
+        fragments = []
+        if row[10] is not None:
+            for frag in row[10].split(','):
+                s, e, _ = frag.split('-')
+                pos_start = int(s)
+                pos_end = int(e)
+                if pos_start < pos_end:
+                    fragments.append
+
+
+
 def process_proteins(dsn, schema, proteins_src, matches_src, processes,
                      **kwargs) -> Tuple[dict, dict, dict, dict, list, list]:
     chunk_size = kwargs.get("chunk_size", 10000)
