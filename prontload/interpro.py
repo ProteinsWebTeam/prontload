@@ -1410,6 +1410,7 @@ def process_proteins(dsn, schema, processes, **kwargs):
             else:
                 logging.info("query time: "
                              "{:.0f} seconds".format(time.time()-ts))
+                ts = time.time()
 
             p_length = row[1]
             p_dbcode = row[2]
