@@ -139,15 +139,7 @@ def cli():
         },
 
         # In the main thread
-        "predictions": {
-            "func": interpro.load_matches,
-            "args": (dsn, schema),
-            "kwargs": dict(
-                processes=args.processes,
-                max_gap=max_gap,
-                tmpdir=args.tmpdir
-            ),
-        },
+        "predictions": {},
 
         # In the main thread
         "report": {
@@ -232,39 +224,17 @@ def cli():
 
     s = steps["predictions"]
     if s["run"]:
-        matches_f = os.path.join(args.tmpdir, "matches")
-        proteins_f = os.path.join(args.tmpdir, "proteins")
-
-        """
-        Export matches in a separate thread
-        One process is reserved to descriptions load and proteins export
-        """
-        logging.info("exporting matches")
-        t_matches = Thread(target=interpro.dump_matches,
-                           args=(dsn, schema, args.processes-1, matches_f,
-                                 args.tmpdir),
-                           kwargs=dict(compresslevel=5))
-        t_matches.start()
-
         if p_descriptions:
-            # Then wait until descriptions are loaded
+            # Wait until descriptions are loaded
             p_descriptions.join()
             logging.info("{:<20}done".format("descriptions"))
 
-        # When descriptions are loaded, we can export proteins
-        logging.info("exporting proteins")
-        p_proteins = mp.Process(target=interpro.dump_proteins,
-                                args=(dsn, schema, proteins_f))
-        p_proteins.start()
+        # Process proteins
+        logging.info("{:<20}running".format("predictions"))
+        res = interpro.process_proteins(dsn, schema, args.processes,
+                                        dir=dir, max_gap=max_gap)
+        logging.info("{:<20}done".format("predictions"))
 
-        p_proteins.join()
-        t_matches.join()
-
-        # Once both exports are completed, we can process proteins
-        logging.info("processing proteins")
-        res = interpro.process_proteins(dsn, schema, proteins_f, matches_f,
-                                        args.processes, dir=args.tmpdir,
-                                        max_gap=max_gap)
         """
         s: dict, number of proteins and matches for each signatures
         c: dict (of dict), multiple comparison metrics between two signatures
@@ -274,10 +244,6 @@ def cli():
         to: list, organisers of taxa/ranks per signature
         """
         s, c, rc, ro, no, to = res
-
-        # We don't need the stores any more
-        os.remove(proteins_f)
-        os.remove(matches_f)
 
         # Finalise the METHOD2PROTEIN table in a separate thread
         logging.info("optimising METHOD2PROTEIN")
