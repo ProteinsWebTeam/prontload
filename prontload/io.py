@@ -32,19 +32,6 @@ class Organiser(object):
                     else:
                         yield k, v
 
-    @property
-    def size(self) -> int:
-        size = 0
-        for b in self.buckets:
-            try:
-                s = os.path.getsize(b["path"])
-            except FileNotFoundError:
-                continue
-            else:
-                size += s
-
-        return size
-
     def add(self, key, value):
         i = bisect.bisect_right(self.keys, key)
         if i:
@@ -85,9 +72,33 @@ class Organiser(object):
         else:
             return data
 
-    def merge(self, as_list: bool=False) -> Generator[dict, None, None]:
+    def merge(self) -> int:
+        size_before = 0
+        sife_after = 0
         for b in self.buckets:
-            yield self.merge_bucket(b, as_list)
+            data = {}
+            if os.path.isfile(b["path"]):
+                size_before += os.path.getsize(b["path"])
+                with gzip.open(b["path"], "rb") as fh:
+                    while True:
+                        try:
+                            chunk = pickle.load(fh)
+                        except EOFError:
+                            break
+                        else:
+                            for key, value in chunk.items():
+                                if key in data:
+                                    data[key] += value
+                                else:
+                                    data[key] = value
+
+            with gzip.open(b["path"], "wb") as fh:
+                for key in sorted(data):
+                    pickle.dump((key, data[key]), fh)
+
+            sife_after += os.path.getsize(b["path"])
+
+        return max(size_before, sife_after)
 
     def remove(self):
         for b in self.buckets:
@@ -97,24 +108,6 @@ class Organiser(object):
                 pass
 
         os.rmdir(self.path)
-
-
-def merge_bucket(in_queue, out_queue, dir=None):
-    while True:
-        task = in_queue.get()
-        if task is None:
-            break
-
-        i, bucket = task
-        items = Organiser.merge_bucket(bucket, as_list=True)
-        fd, path = mkstemp(dir=dir)
-        os.close(fd)
-
-        with open(path, "wb") as fh:
-            for item in items:
-                pickle.dump(item, fh)
-
-        out_queue.put((i, path))
 
 
 class Store(object):
