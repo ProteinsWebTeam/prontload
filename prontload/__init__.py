@@ -232,7 +232,7 @@ def cli():
         # Process proteins
         logging.info("{:<20}running".format("predictions"))
         res = interpro.process_proteins(dsn, schema, args.processes,
-                                        dir=dir, max_gap=max_gap)
+                                        dir=args.tmpdir, max_gap=max_gap)
         logging.info("{:<20}done".format("predictions"))
 
         """
