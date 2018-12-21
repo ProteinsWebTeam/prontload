@@ -409,7 +409,7 @@ class ProteinConsumer(Process):
                 SELECT LEFT_NUMBER, TAX_ID, RANK
                 FROM {}.LINEAGE
                 WHERE RANK IN (
-                  'superkingdom', 'kingdom', 'phylum', 'class', 'order', 
+                  'superkingdom', 'kingdom', 'phylum', 'class', 'order',
                   'family', 'genus', 'species'
                 )
                 """.format(self.schema)
@@ -523,6 +523,8 @@ class ProteinConsumer(Process):
 
             organiser_names.dump()
             organiser_taxa.dump()
+
+        left_numbers = None  # free some memory
 
         size = organiser_names.merge()
         logging.info("names: {} bytes".format(size))
@@ -1434,9 +1436,9 @@ def process_proteins(dsn, schema, processes, **kwargs):
         if s_dbcode in ('F', 'V'):
             """
             PANTHER & PRINTS:
-                Merge protein matches. 
+                Merge protein matches.
                 /!\ do not consider multipart fragments
-                
+
                 If the signature is a family*,
                     use the entire protein.
 
