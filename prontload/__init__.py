@@ -213,7 +213,7 @@ def cli():
             p_descriptions.join()
 
         exec_functions((
-            "method2protein",
+            "predictions",
             interpro.load_method2protein,
             (dsn, schema),
             dict(dir=args.tmpdir, max_gap=max_gap, processes=args.processes)
