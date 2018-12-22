@@ -5,6 +5,7 @@ import bisect
 import gzip
 import os
 import pickle
+from multiprocessing import Pool
 from tempfile import mkdtemp, mkstemp
 from typing import Generator, List, Optional
 
@@ -32,6 +33,16 @@ class Organiser(object):
                     else:
                         yield k, v
 
+    @property
+    def size(self) -> int:
+        size = 0
+        for b in self.buckets:
+            try:
+                size += os.path.getsize(b["path"])
+            except FileNotFoundError:
+                continue
+        return size
+
     def add(self, key, value):
         i = bisect.bisect_right(self.keys, key)
         if i:
@@ -51,7 +62,7 @@ class Organiser(object):
                 b["data"] = {}
 
     @staticmethod
-    def merge_bucket(bucket: dict, as_list: bool=False):
+    def merge_bucket(bucket: dict):
         data = {}
         if os.path.isfile(bucket["path"]):
             with gzip.open(bucket["path"], "rb") as fh:
@@ -67,38 +78,20 @@ class Organiser(object):
                             else:
                                 data[key] = value
 
-        if as_list:
-            return [(key, data[key]) for key in sorted(data)]
+        with gzip.open(b["path"], "wb") as fh:
+            for key in sorted(data):
+                pickle.dump((key, data[key]), fh)
+
+    def merge(self, processes: int=1) -> int:
+        size_before = self.size
+        if processes > 1:
+            with Pool(processes - 1) as pool:
+                pool.map(self.merge_bucket, self.buckets)
         else:
-            return data
+            for b in self.buckets:
+                self.merge_bucket(b)
 
-    def merge(self) -> int:
-        size_before = 0
-        sife_after = 0
-        for b in self.buckets:
-            data = {}
-            if os.path.isfile(b["path"]):
-                size_before += os.path.getsize(b["path"])
-                with gzip.open(b["path"], "rb") as fh:
-                    while True:
-                        try:
-                            chunk = pickle.load(fh)
-                        except EOFError:
-                            break
-                        else:
-                            for key, value in chunk.items():
-                                if key in data:
-                                    data[key] += value
-                                else:
-                                    data[key] = value
-
-            with gzip.open(b["path"], "wb") as fh:
-                for key in sorted(data):
-                    pickle.dump((key, data[key]), fh)
-
-            sife_after += os.path.getsize(b["path"])
-
-        return max(size_before, sife_after)
+        return max(size_before, self.size)
 
     def remove(self):
         for b in self.buckets:
