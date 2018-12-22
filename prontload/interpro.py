@@ -397,26 +397,26 @@ class ProteinConsumer(Process):
     def run(self):
         con = Connection(self.dsn)
 
-        # Get signatures
-        accessions = chunk_signatures(con, self.schema)
-        organiser_names = io.Organiser(accessions, dir=self.dir)
-        organiser_taxa = io.Organiser(accessions, dir=self.dir)
-
-        # Get lineages for the METHOD_TAXA table
-        left_numbers = {}
-        for left_num, tax_id, rank in con.get(
-                """
-                SELECT LEFT_NUMBER, TAX_ID, RANK
-                FROM {}.LINEAGE
-                WHERE RANK IN (
-                  'superkingdom', 'kingdom', 'phylum', 'class', 'order',
-                  'family', 'genus', 'species'
-                )
-                """.format(self.schema)
-        ):
-            if left_num not in left_numbers:
-                left_numbers[left_num] = {}
-            left_numbers[left_num][rank] = tax_id
+        # # Get signatures
+        # accessions = chunk_signatures(con, self.schema)
+        # organiser_names = io.Organiser(accessions, dir=self.dir)
+        # organiser_taxa = io.Organiser(accessions, dir=self.dir)
+        #
+        # # Get lineages for the METHOD_TAXA table
+        # left_numbers = {}
+        # for left_num, tax_id, rank in con.get(
+        #         """
+        #         SELECT LEFT_NUMBER, TAX_ID, RANK
+        #         FROM {}.LINEAGE
+        #         WHERE RANK IN (
+        #           'superkingdom', 'kingdom', 'phylum', 'class', 'order',
+        #           'family', 'genus', 'species'
+        #         )
+        #         """.format(self.schema)
+        # ):
+        #     if left_num not in left_numbers:
+        #         left_numbers[left_num] = {}
+        #     left_numbers[left_num][rank] = tax_id
 
         signatures = {}
         comparisons = {}
@@ -433,7 +433,7 @@ class ProteinConsumer(Process):
 
                 md5 = self.hash(matches, self.max_gap)
                 _signatures, _comparisons = self.compare(matches)
-                ranks = left_numbers.get(left_num, {"no rank": -1})
+                # ranks = left_numbers.get(left_num, {"no rank": -1})
 
                 for method_acc in _signatures:
                     data.append((
@@ -451,12 +451,12 @@ class ProteinConsumer(Process):
                     n_matches = _signatures[method_acc]
                     signatures[method_acc]["matches"] += n_matches
 
-                    # Taxonomic origins
-                    for rank, tax_id in ranks.items():
-                        organiser_taxa.add(method_acc, (rank, tax_id))
-
-                    # UniProt descriptions
-                    organiser_names.add(method_acc, (desc_id, dbcode))
+                    # # Taxonomic origins
+                    # for rank, tax_id in ranks.items():
+                    #     organiser_taxa.add(method_acc, (rank, tax_id))
+                    #
+                    # # UniProt descriptions
+                    # organiser_names.add(method_acc, (desc_id, dbcode))
 
                 # _comparisons: match overlaps between signatures
                 for acc_1 in _comparisons:
@@ -521,24 +521,24 @@ class ProteinConsumer(Process):
                 )
                 con.commit()
 
-            organiser_names.dump()
-            organiser_taxa.dump()
+            # organiser_names.dump()
+            # organiser_taxa.dump()
 
-        left_numbers = None  # free some memory
+        # left_numbers = None  # free some memory
 
-        size = organiser_names.merge()
-        logging.info("names: {} bytes".format(size))
-
-        size = organiser_taxa.merge()
-        logging.info("taxa: {} bytes".format(size))
+        # size = organiser_names.merge()
+        # logging.info("names: {} bytes".format(size))
+        #
+        # size = organiser_taxa.merge()
+        # logging.info("taxa: {} bytes".format(size))
 
         self.queue_out.put((
             signatures,
             comparisons,
             residue_coverages,
             residue_overlaps,
-            organiser_names,
-            organiser_taxa,
+            # organiser_names,
+            # organiser_taxa,
         ))
 
     @staticmethod
@@ -1480,11 +1480,12 @@ def process_proteins(dsn, schema, processes, **kwargs):
     # For residue overlap comparison
     residue_coverages = {}
     residue_overlaps = {}
-    # For counts
-    name_organisers = []
-    taxon_organisers = []
+    # # For counts
+    # name_organisers = []
+    # taxon_organisers = []
     for _ in consumers:
-        s, c, rc, ro, no, to = out_queue.get()
+        # s, c, rc, ro, no, to = out_queue.get()
+        s, c, rc, ro = out_queue.get()
 
         # Merge dictionaries
         for acc in s:
@@ -1524,14 +1525,16 @@ def process_proteins(dsn, schema, processes, **kwargs):
             else:
                 residue_overlaps[acc_1] = ro[acc_1]
 
-        name_organisers.append(no)
-        taxon_organisers.append(to)
+        # name_organisers.append(no)
+        # taxon_organisers.append(to)
 
     for c in consumers:
         c.join()
 
-    return (signatures, comparisons, residue_coverages, residue_overlaps,
-            name_organisers, taxon_organisers)
+    return signatures, comparisons, residue_coverages, residue_overlaps
+
+    # return (signatures, comparisons, residue_coverages, residue_overlaps,
+    #         name_organisers, taxon_organisers)
 
 
 def copy_schema(dsn, schema):
