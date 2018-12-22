@@ -8,10 +8,7 @@ import time
 from multiprocessing import Process, Queue
 
 from . import io
-from .oracledb import Connection
-
-
-BULK_INSERT_SIZE = 100000
+from .oracledb import Connection, BULK_INSERT_SIZE
 
 
 def create_synonyms(dsn, src, dst):
@@ -1169,8 +1166,7 @@ def optimise_method2protein(dsn, schema):
     con.grant("SELECT", schema, "METHOD2PROTEIN", "INTERPRO_SELECT")
 
 
-def load_description_counts(dsn, schema, organisers):
-    con = Connection(dsn)
+def load_description_counts(con: Connection, schema: str, organiser: io.Organiser):
     con.drop_table(schema, "METHOD_DESC")
     con.execute(
         """
@@ -1185,7 +1181,7 @@ def load_description_counts(dsn, schema, organisers):
     )
 
     signatures = {}
-    for acc, descriptions in heapq.merge(*organisers, key=lambda x: x[0]):
+    for acc, descriptions in organiser:
         if acc in signatures:
             s = signatures[acc]
         else:
@@ -1200,8 +1196,7 @@ def load_description_counts(dsn, schema, organisers):
     data = []
     for method_acc, descriptions in signatures.items():
         for desc_id, dbcodes in descriptions.items():
-            data.append((method_acc, desc_id, dbcodes.get('S', 0),
-                         dbcodes.get('T', 0)))
+            data.append((method_acc, desc_id, dbcodes['S'], dbcodes['T']))
 
             if len(data) == BULK_INSERT_SIZE:
                 con.executemany(
@@ -1236,8 +1231,7 @@ def load_description_counts(dsn, schema, organisers):
     con.grant("SELECT", schema, "METHOD_DESC", "INTERPRO_SELECT")
 
 
-def load_taxonomy_counts(dsn, schema, organisers):
-    con = Connection(dsn)
+def load_taxonomy_counts(con: Connection, schema: str, organiser: io.Organiser):
     con.drop_table(schema, "METHOD_TAXA")
     con.execute(
         """
@@ -1252,7 +1246,7 @@ def load_taxonomy_counts(dsn, schema, organisers):
     )
 
     signatures = {}
-    for acc, taxa in heapq.merge(*organisers, key=lambda x: x[0]):
+    for acc, taxa in organiser:
         if acc in signatures:
             s = signatures[acc]
         else:
@@ -1308,6 +1302,96 @@ def load_taxonomy_counts(dsn, schema, organisers):
     con.grant("SELECT", schema, "METHOD_TAXA", "INTERPRO_SELECT")
 
 
+def load_count_tables(dsn: str, schema: str, processes: int=1, dir: str=None
+                      bucket_size: int=1000, sync_frequency: int= 1000000):
+    con = Connection(dsn)
+
+    # Chunk signatures
+    accessions = []
+    cnt = bucket_size
+    for row in con.get(
+        """
+        SELECT METHOD_AC
+        FROM {}.METHOD
+        ORDER BY METHOD_AC
+        """.format(schema)
+    ):
+        if cnt == bucket_size:
+            accessions.append(row[0])
+            cnt = 1
+        else:
+            cnt += 1
+
+    # Get lineages
+    left_numbers = {}
+    for left_num, tax_id, rank in con.get(
+            """
+            SELECT LEFT_NUMBER, TAX_ID, RANK
+            FROM {}.LINEAGE
+            WHERE RANK IN (
+              'superkingdom', 'kingdom', 'phylum', 'class', 'order',
+              'family', 'genus', 'species'
+            )
+            """.format(self.schema)
+    ):
+        if left_num in left_numbers:
+            left_numbers[left_num][rank] = tax_id
+        else:
+            left_numbers[left_num] = {rank: tax_id}
+
+    names = io.Organiser(accessions, dir=dir)
+    taxa = io.Organiser(accessions, dir=dir)
+
+    cnt = 0
+    ts = time.time()
+    for acc, left_num, desc_id, dbcode, descr_id in con.get(
+        """
+        SELECT METHOD_AC, DESC_ID, DBCODE, LEFT_NUMBER
+        FROM {}.METHOD2PROTEIN
+        """.format(schema)
+    ):
+        # UniProt descriptions
+        names.add(acc, (descr_id, dbcode))
+
+        # Taxonomic origins
+        ranks = left_numbers.get(left_num, {"no rank": -1})
+        for rank, tax_id in ranks.items():
+            taxa.add(method_acc, (rank, tax_id))
+
+        cnt += 1
+        if not cnt % sync_frequency:
+            names.dump()
+            taxa.dump()
+
+        if not cnt % 10000000:
+            logging.info("{:>12} ({:.0f} rows/sec)".format(
+                cnt,
+                cnt / (time.time() - ts)
+            ))
+
+    names.dump()
+    taxa.dump()
+    left_numbers = None
+    logging.info("{:>12} ({:.0f} rows/sec)".format(
+        cnt,
+        cnt / (time.time() - ts)
+    ))
+
+    size = names.merge(processes)
+    logging.info("names: {} bytes".format(size))
+
+    load_description_counts(con, schema, names)
+    logging.info("METHOD_DESC ready")
+    names.remove()
+
+    size = taxa.merge(processes)
+    logging.info("taxa: {} bytes".format(size))
+
+    load_taxonomy_counts(con, schema, taxa)
+    logging.info("METHOD_TAXA ready")
+    taxa.remove()
+
+
 def _merge_matches(signatures: dict) -> list:
     matches = []
 
@@ -1331,7 +1415,7 @@ def _merge_matches(signatures: dict) -> list:
     return matches
 
 
-def process_proteins(dsn, schema, processes, **kwargs):
+def load_method2protein(dsn, schema, processes, **kwargs):
     chunk_size = kwargs.get("chunk_size", 10000)
     dir = kwargs.get("dir")
     max_gap = kwargs.get("max_gap", 20)

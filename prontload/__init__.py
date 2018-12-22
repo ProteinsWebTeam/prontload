@@ -229,10 +229,10 @@ def cli():
             p_descriptions.join()
             logging.info("{:<20}done".format("descriptions"))
 
-        # Process proteins
+        # Create METHOD2PROTEIN table
         logging.info("{:<20}running".format("predictions"))
-        res = interpro.process_proteins(dsn, schema, args.processes,
-                                        dir=args.tmpdir, max_gap=max_gap)
+        res = interpro.load_method2protein(dsn, schema, args.processes,
+                                           dir=args.tmpdir, max_gap=max_gap)
         logging.info("{:<20}done".format("predictions"))
 
         """
