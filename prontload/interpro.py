@@ -1394,7 +1394,7 @@ def load_count_tables(dsn: str, schema: str, bucket_size: int=1000,
               'superkingdom', 'kingdom', 'phylum', 'class', 'order',
               'family', 'genus', 'species'
             )
-            """.format(self.schema)
+            """.format(schema)
     ):
         if left_num in left_numbers:
             left_numbers[left_num][rank] = tax_id
