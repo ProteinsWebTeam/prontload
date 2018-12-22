@@ -369,11 +369,11 @@ def chunk_signatures(con, schema, size=1000):
     accessions = []
     cnt = size
     for row in con.get(
-            """
-                SELECT METHOD_AC
-                FROM {}.METHOD
-                ORDER BY METHOD_AC
-            """.format(schema)
+        """
+            SELECT METHOD_AC
+            FROM {}.METHOD
+            ORDER BY METHOD_AC
+        """.format(schema)
     ):
         if cnt == size:
             accessions.append(row[0])
