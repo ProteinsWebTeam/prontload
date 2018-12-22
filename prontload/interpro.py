@@ -394,6 +394,16 @@ class ProteinConsumer(Process):
     def run(self):
         con = Connection(self.dsn)
 
+        # Get signatures
+        signature_info = {}
+        for acc, dbcode, s_type in con.get(
+            """
+                SELECT METHOD_AC, DBCODE, SIG_TYPE
+                FROM {}.METHOD
+            """.format(self.schema)
+        ):
+            signature_info[acc] = (dbcode, s_type)
+
         # # Get signatures
         # accessions = chunk_signatures(con, self.schema)
         # organiser_names = io.Organiser(accessions, dir=self.dir)
@@ -419,12 +429,8 @@ class ProteinConsumer(Process):
         comparisons = {}
         residue_coverages = {}
         residue_overlaps = {}
-        while True:
-            chunk = self.queue_in.get()
-            if chunk is None:
-                break
-
-            data = []
+        data = []
+        for chunk in iter(self.queue_in.get, None):
             for args in chunk:
                 protein_acc, dbcode, length, desc_id, left_num, matches = args
 
@@ -505,7 +511,7 @@ class ProteinConsumer(Process):
                 self.compare_fragments(matches, residue_coverages,
                                        residue_overlaps)
 
-            for i in range(0, len(data), BULK_INSERT_SIZE):
+            while len(data) >= BULK_INSERT_SIZE:
                 con.executemany(
                     """
                     INSERT /*+APPEND*/ INTO {}.METHOD2PROTEIN (
@@ -514,12 +520,26 @@ class ProteinConsumer(Process):
                     )
                     VALUES (:1, :2, :3, :4, :5, :6, :7)
                     """.format(self.schema),
-                    data[i:i+BULK_INSERT_SIZE]
+                    data[:BULK_INSERT_SIZE]
                 )
                 con.commit()
+                data = data[BULK_INSERT_SIZE:]
 
             # organiser_names.dump()
             # organiser_taxa.dump()
+
+        for i in range(0, len(data), BULK_INSERT_SIZE):
+            con.executemany(
+                """
+                INSERT /*+APPEND*/ INTO {}.METHOD2PROTEIN (
+                    METHOD_AC, PROTEIN_AC, DBCODE,
+                    MD5, LEN, LEFT_NUMBER, DESC_ID
+                )
+                VALUES (:1, :2, :3, :4, :5, :6, :7)
+                """.format(self.schema),
+                data[i:i+BULK_INSERT_SIZE]
+            )
+            con.commit()
 
         # left_numbers = None  # free some memory
 
@@ -537,6 +557,47 @@ class ProteinConsumer(Process):
             # organiser_names,
             # organiser_taxa,
         ))
+
+    def merge_matches(matches: list, signatures: dict, length: int) -> list:
+        result = []
+        to_merge = {}
+
+        for acc, pos_start, pos_end, _ in matches:
+            dbcode, _type = signatures[acc]
+
+            if dbcode in ('F', 'V'):
+                """
+                PANTHER & PRINTS: Merge protein matches.
+                If the signature is a family*, use the entire protein.
+                * all PANTHER signatures, almost all PRINTS signatures
+                """
+                if acc not in to_merge:
+                    if _type == 'F':
+                        # Families: use the entire protein sequence
+                        to_merge[acc] = [(1, length)]
+                    else:
+                        to_merge[acc] = [(pos_start, pos_end)]
+                elif _type != 'F':
+                    # Only for non-families
+                    # (because families use the entire protein)
+                    to_merge[acc].append((pos_start, pos_end))
+            else:
+                result.append((acc, pos_start, pos_end))
+
+        for acc in to_merge:
+            min_pos = None
+            max_pos = None
+
+            for pos_start, pos_end in to_merge[acc]:
+                if min_pos is None or pos_start < min_pos:
+                    min_pos = pos_start
+
+                if max_pos is None or pos_end > max_pos:
+                    max_pos = pos_end
+
+            result.append((acc, min_pos, max_pos))
+
+        return result
 
     @staticmethod
     def compare(matches):
@@ -1302,8 +1363,9 @@ def load_taxonomy_counts(con: Connection, schema: str, organiser: io.Organiser):
     con.grant("SELECT", schema, "METHOD_TAXA", "INTERPRO_SELECT")
 
 
-def load_count_tables(dsn: str, schema: str, processes: int=1, dir: str=None
-                      bucket_size: int=1000, sync_frequency: int= 1000000):
+def load_count_tables(dsn: str, schema: str, bucket_size: int=1000,
+                      dir: str=None, processes: int=1,
+                      sync_frequency: int=1000000):
     con = Connection(dsn)
 
     # Chunk signatures
@@ -1381,51 +1443,25 @@ def load_count_tables(dsn: str, schema: str, processes: int=1, dir: str=None
     logging.info("names: {} bytes".format(size))
 
     load_description_counts(con, schema, names)
-    logging.info("METHOD_DESC ready")
     names.remove()
+    logging.info("METHOD_DESC ready")
 
     size = taxa.merge(processes)
     logging.info("taxa: {} bytes".format(size))
 
     load_taxonomy_counts(con, schema, taxa)
-    logging.info("METHOD_TAXA ready")
     taxa.remove()
+    logging.info("METHOD_TAXA ready")
 
 
-def _merge_matches(signatures: dict) -> list:
-    matches = []
-
-    for s_acc in signatures:
-        min_pos = None
-        max_pos = None
-
-        for pos_start, pos_end in signatures[s_acc]:
-            if min_pos is None or pos_start < min_pos:
-                min_pos = pos_start
-
-            if max_pos is None or pos_end > max_pos:
-                max_pos = pos_end
-
-        """
-        None: do not consider multipart fragments
-        (How would me merge them?)
-        """
-        matches.append((s_acc, min_pos, max_pos, None))
-
-    return matches
-
-
-def load_method2protein(dsn, schema, processes, **kwargs):
-    chunk_size = kwargs.get("chunk_size", 10000)
-    dir = kwargs.get("dir")
-    max_gap = kwargs.get("max_gap", 20)
-
+def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
+                        dir: str=None, max_gap: int=20, processes: int=1):
     processes = max(1, processes - 1)
-    in_queue = Queue(maxsize=processes)
-    out_queue = Queue()
+    task_queue = Queue(maxsize=processes)
+    done_queue = Queue()
     consumers = []
     for _ in range(processes):
-        c = ProteinConsumer(dsn, schema, max_gap, in_queue, out_queue,
+        c = ProteinConsumer(dsn, schema, max_gap, task_queue, done_queue,
                             dir=dir)
         c.start()
         consumers.append(c)
@@ -1451,8 +1487,7 @@ def load_method2protein(dsn, schema, processes, **kwargs):
         SELECT
             P.PROTEIN_AC, P.LEN, P.DBCODE, D.DESC_ID,
             NVL(E.LEFT_NUMBER, 0),
-            MA.METHOD_AC, MA.DBCODE, ME.SIG_TYPE,
-            MA.POS_FROM, MA.POS_TO, MA.FRAGMENTS
+            MA.METHOD_AC, MA.POS_FROM, MA.POS_TO, MA.FRAGMENTS
         FROM {0}.PROTEIN P
         INNER JOIN {0}.ETAXI E
           ON P.TAX_ID = E.TAX_ID
@@ -1460,8 +1495,6 @@ def load_method2protein(dsn, schema, processes, **kwargs):
           ON P.PROTEIN_AC = D.PROTEIN_AC
         INNER JOIN INTERPRO.MATCH MA
           ON P.PROTEIN_AC = MA.PROTEIN_AC
-        INNER JOIN {0}.METHOD ME
-          ON MA.METHOD_AC = ME.METHOD_AC
         WHERE P.FRAGMENT = 'N'
         ORDER BY P.PROTEIN_AC
     """.format(schema)
@@ -1472,7 +1505,6 @@ def load_method2protein(dsn, schema, processes, **kwargs):
     descr_id = None
     left_num = None
     matches = []
-    signatures = {}
     chunk = []
     cnt = 0
     ts = time.time()
@@ -1480,19 +1512,13 @@ def load_method2protein(dsn, schema, processes, **kwargs):
         p_acc = row[0]
         if p_acc != _p_acc:
             if _p_acc:
-                # Merge matches
-                matches += _merge_matches(signatures)
-
                 # Add protein to chunk
                 chunk.append((_p_acc, p_dbcode, p_length, descr_id, left_num,
                               matches))
 
                 if len(chunk) == chunk_size:
-                    in_queue.put(chunk)
+                    task_queue.put(chunk)
                     chunk = []
-
-                matches = []
-                signatures = {}
             else:
                 logging.info("query time: "
                              "{:.0f} seconds".format(time.time()-ts))
@@ -1502,6 +1528,7 @@ def load_method2protein(dsn, schema, processes, **kwargs):
             p_dbcode = row[2]
             descr_id = row[3]
             left_num = row[4]
+            matches = []
             _p_acc = p_acc
             cnt += 1
             if not cnt % 10000000:
@@ -1510,48 +1537,17 @@ def load_method2protein(dsn, schema, processes, **kwargs):
                     cnt / (time.time() - ts)
                 ))
 
-        s_acc = row[5]
-        s_dbcode = row[6]
-        s_type = row[7]
-        pos_start = row[8]
-        pos_end = row[9]
-        fragments_str = row[10]
-
-        if s_dbcode in ('F', 'V'):
-            """
-            PANTHER & PRINTS:
-                Merge protein matches.
-                /!\ do not consider multipart fragments
-
-                If the signature is a family*,
-                    use the entire protein.
-
-                * all PANTHER signatures,
-                    almost all PRINTS signatures
-            """
-            if s_acc not in signatures:
-                if s_type == 'F':
-                    # Families: use the entire protein sequence
-                    signatures[s_acc] = [(1, p_length)]
-                else:
-                    signatures[s_acc] = [(pos_start, pos_end)]
-            elif s_type != 'F':
-                # Only for non-families
-                # (because families use the entire protein)
-                signatures[s_acc].append((pos_start, pos_end))
-        else:
-            matches.append((s_acc, pos_start, pos_end, fragments_str))
+        matches.append((row[5], row[6], row[7], row[8]))
 
     if _p_acc:
         # Last protein (_p_acc is None only if 0 proteins)
-        matches += _merge_matches(signatures)
         chunk.append((_p_acc, p_dbcode, p_length, descr_id, left_num,
                       matches))
-        in_queue.put(chunk)
+        task_queue.put(chunk)
         cnt += 1
 
     for _ in consumers:
-        in_queue.put(None)
+        task_queue.put(None)
 
     logging.info("{:>12} ({:.0f} proteins/sec)".format(
         cnt,

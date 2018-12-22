@@ -19,22 +19,12 @@ def exec_functions(*iterable):
         logging.info("{:<20}done".format(name))
 
 
-def exec_function(queue):
-    while True:
-        args = queue.get()
-        if args is None:
-            break
-
-        func, args = args
-        func(*args)
-
-
 def cli():
     import argparse
-    import multiprocessing as mp
     import os
     import json
     from datetime import datetime
+    from multiprocessing import Process
     from tempfile import gettempdir
     from threading import Thread
 
@@ -211,8 +201,8 @@ def cli():
     s = steps["descriptions"]
     if s["run"]:
         logging.info("{:<20}running".format("descriptions"))
-        p_descriptions = mp.Process(target=s["func"], args=s["args"],
-                                    kwargs=s.get("kwargs", {}))
+        p_descriptions = Process(target=s["func"], args=s["args"],
+                                 kwargs=s.get("kwargs", {}))
         p_descriptions.start()
     else:
         p_descriptions = None
@@ -231,8 +221,10 @@ def cli():
 
         # Create METHOD2PROTEIN table
         logging.info("{:<20}running".format("predictions"))
-        res = interpro.load_method2protein(dsn, schema, args.processes,
-                                           dir=args.tmpdir, max_gap=max_gap)
+        res = interpro.load_method2protein(dsn, schema,
+                                           dir=args.tmpdir,
+                                           max_gap=max_gap,
+                                           processes=args.processes)
         logging.info("{:<20}done".format("predictions"))
 
         """
@@ -240,10 +232,8 @@ def cli():
         c: dict (of dict), multiple comparison metrics between two signatures
         rc: dict, number of residues matched for each signature
         ro: dict (dict), residue overlap between two signatures
-        no: list, organisers of UniProt descriptions per signature
-        to: list, organisers of taxa/ranks per signature
         """
-        s, c, rc, ro, no, to = res
+        s, c, rc, ro = res
 
         # Finalise the METHOD2PROTEIN table in a separate thread
         logging.info("optimising METHOD2PROTEIN")
@@ -251,49 +241,24 @@ def cli():
                                    args=(dsn, schema))
         t_method2proteins.start()
 
-        """
-        We still have four steps to do:
-            - make and store predictions (`s` and `c`)
-            - calculate the Jaccard/containment indices (`rc`, `ro`)
-            - merge UniProt description organisers and store counts (`no`)
-            - merge taxa/ranks organisers and store counts (`to`)
-
-        -> create a pool of workers and submit functions and arguments
-        """
-
-        # Pool of between 1 and 4 workers (inclusive)
-        n = min(4, max(1, args.processes-1))
-        pool = []
-        q = mp.Queue(maxsize=n)
-        for _ in range(n):
-            p = mp.Process(target=exec_function, args=(q,))
-            p.start()
-            pool.append(p)
-
         logging.info("making predictions")
-        q.put((interpro.make_predictions, (dsn, schema, s, c)))
+        p1 = Process(target=interpro.make_predictions,
+                     args=(dsn, schema, s, c))
+        p1.start()
 
-        """
-        On the following calls:
-            log message only after the task is accepted in the queue
-            so we never log something way before it actually starts
-        """
-        q.put((interpro.calculate_similarities, (dsn, schema, rc, ro)))
         logging.info("calculating similarities")
+        p2 = Process(target=interpro.calculate_similarities,
+                     args=(dsn, schema, rc, ro))
+        p2.start()
 
-        q.put((interpro.load_description_counts, (dsn, schema, no)))
-        logging.info("loading UniProt description counts")
-
-        q.put((interpro.load_taxonomy_counts, (dsn, schema, ro)))
-        logging.info("loading taxonomic origin counts")
-
-        for _ in pool:
-            q.put(None)
-
-        for p in pool:
-            p.join()
+        logging.info("loading count tables")
+        interpro.load_count_tables(dsn, schema,
+                                   dir=args.tmpdir,
+                                   processes=args.processes-2)
 
         t_method2proteins.join()
+        p1.join()
+        p2.join()
     elif p_descriptions:
         p_descriptions.join()
         logging.info("{:<20}done".format("descriptions"))
