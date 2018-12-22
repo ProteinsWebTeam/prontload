@@ -12,10 +12,10 @@ logging.basicConfig(
 )
 
 
-def exec_functions(*iterable):
-    for name, func, args, kwargs in iterable:
+def exec_functions(*args):
+    for name, func, f_args, f_kwargs in args:
         logging.info("{:<20}running".format(name))
-        func(*args, **kwargs)
+        func(*f_args, **f_kwargs)
         logging.info("{:<20}done".format(name))
 
 
@@ -166,10 +166,7 @@ def cli():
             step["run"] = not step.get("skip", False)
 
     if steps["clear"]["run"]:
-        logging.info("{:<20}running".format("clear"))
-        s = steps["clear"]
-        s["func"](*s["args"], **s.get("kwargs", {}))
-        logging.info("{:<20}done".format("clear"))
+        exec_functions(("clear", s["func"], s["args"], s.get("kwargs", {})))
 
     # Start background steps in separate thread
     group = []
@@ -182,27 +179,25 @@ def cli():
     t_group = Thread(target=exec_functions, args=group)
     t_group.start()
 
+    group = []
     for name in ("synonyms", "signatures", "taxa"):
         s = steps[name]
         if s["run"]:
-            logging.info("{:<20}running".format(name))
-            s["func"](*s["args"], **s.get("kwargs", {}))
-            logging.info("{:<20}done".format(name))
+            group.append((name, s["func"], s["args"], s.get("kwargs", {})))
+    exec_functions(*group)
 
     s = steps["proteins"]
     if s["run"]:
-        logging.info("{:<20}running".format("proteins"))
-        t_proteins = Thread(target=s["func"], args=s["args"],
-                            kwargs=s.get("kwargs", {}))
+        args = ("proteins", s["func"], s["args"], s.get("kwargs", {}))
+        t_proteins = Thread(target=exec_functions, args=(args,))
         t_proteins.start()
     else:
         t_proteins = None
 
     s = steps["descriptions"]
     if s["run"]:
-        logging.info("{:<20}running".format("descriptions"))
-        p_descriptions = Process(target=s["func"], args=s["args"],
-                                 kwargs=s.get("kwargs", {}))
+        args = ("descriptions", s["func"], s["args"], s.get("kwargs", {}))
+        p_descriptions = Process(target=exec_functions, args=(args,))
         p_descriptions.start()
     else:
         p_descriptions = None
@@ -210,58 +205,21 @@ def cli():
     # Wait until proteins are loaded in Oracle
     if t_proteins:
         t_proteins.join()
-        logging.info("{:<20}done".format("proteins"))
 
     s = steps["predictions"]
     if s["run"]:
         if p_descriptions:
             # Wait until descriptions are loaded
             p_descriptions.join()
-            logging.info("{:<20}done".format("descriptions"))
 
-        # Create METHOD2PROTEIN table
-        logging.info("{:<20}running".format("predictions"))
-        res = interpro.load_method2protein(dsn, schema,
-                                           dir=args.tmpdir,
-                                           max_gap=max_gap,
-                                           processes=args.processes)
-        logging.info("{:<20}done".format("predictions"))
-
-        """
-        s: dict, number of proteins and matches for each signatures
-        c: dict (of dict), multiple comparison metrics between two signatures
-        rc: dict, number of residues matched for each signature
-        ro: dict (dict), residue overlap between two signatures
-        """
-        s, c, rc, ro = res
-
-        # Finalise the METHOD2PROTEIN table in a separate thread
-        logging.info("optimising METHOD2PROTEIN")
-        t_method2proteins = Thread(target=interpro.optimise_method2protein,
-                                   args=(dsn, schema))
-        t_method2proteins.start()
-
-        logging.info("making predictions")
-        p1 = Process(target=interpro.make_predictions,
-                     args=(dsn, schema, s, c))
-        p1.start()
-
-        logging.info("calculating similarities")
-        p2 = Process(target=interpro.calculate_similarities,
-                     args=(dsn, schema, rc, ro))
-        p2.start()
-
-        logging.info("loading count tables")
-        interpro.load_count_tables(dsn, schema,
-                                   dir=args.tmpdir,
-                                   processes=args.processes-2)
-
-        t_method2proteins.join()
-        p1.join()
-        p2.join()
+        exec_functions((
+            "method2protein",
+            interpro.load_method2protein,
+            (dsn, schema),
+            dict(dir=args.tmpdir, max_gap=max_gap, processes=args.processes)
+        ))
     elif p_descriptions:
         p_descriptions.join()
-        logging.info("{:<20}done".format("descriptions"))
 
     t_group.join()
 

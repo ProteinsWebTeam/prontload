@@ -6,6 +6,7 @@ import heapq
 import logging
 import time
 from multiprocessing import Process, Queue
+from threading import Thread
 
 from . import io
 from .oracledb import Connection, BULK_INSERT_SIZE
@@ -1363,9 +1364,8 @@ def load_taxonomy_counts(con: Connection, schema: str, organiser: io.Organiser):
     con.grant("SELECT", schema, "METHOD_TAXA", "INTERPRO_SELECT")
 
 
-def load_count_tables(dsn: str, schema: str, bucket_size: int=1000,
-                      dir: str=None, processes: int=1,
-                      sync_frequency: int=1000000):
+def dump_descr_taxa(dsn: str, schema: str, bucket_size: int=1000,
+                    dir: str=None, sync_frequency: int=1000000) -> tuple:
     con = Connection(dsn)
 
     # Chunk signatures
@@ -1439,28 +1439,16 @@ def load_count_tables(dsn: str, schema: str, bucket_size: int=1000,
         cnt / (time.time() - ts)
     ))
 
-    size = names.merge(processes)
-    logging.info("names: {} bytes".format(size))
-
-    load_description_counts(con, schema, names)
-    names.remove()
-    logging.info("METHOD_DESC ready")
-
-    size = taxa.merge(processes)
-    logging.info("taxa: {} bytes".format(size))
-
-    load_taxonomy_counts(con, schema, taxa)
-    taxa.remove()
-    logging.info("METHOD_TAXA ready")
+    return names, taxa
 
 
 def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
                         dir: str=None, max_gap: int=20, processes: int=1):
-    processes = max(1, processes - 1)
-    task_queue = Queue(maxsize=processes)
+    n_workers = max(1, processes - 1)
+    task_queue = Queue(maxsize=n_workers)
     done_queue = Queue()
     consumers = []
-    for _ in range(processes):
+    for _ in range(n_workers):
         c = ProteinConsumer(dsn, schema, max_gap, task_queue, done_queue,
                             dir=dir)
         c.start()
@@ -1554,18 +1542,20 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
         cnt / (time.time() - ts)
     ))
 
-    # For predictions
+    # number of proteins and matches for each signatures
     signatures = {}
+    # multiple comparison metrics between two signatures
     comparisons = {}
-    # For residue overlap comparison
+    # number of residues matched for each signature
     residue_coverages = {}
+    # residue overlap between two signatures
     residue_overlaps = {}
     # # For counts
     # name_organisers = []
     # taxon_organisers = []
     for _ in consumers:
         # s, c, rc, ro, no, to = out_queue.get()
-        s, c, rc, ro = out_queue.get()
+        s, c, rc, ro = done_queue.get()
 
         # Merge dictionaries
         for acc in s:
@@ -1611,10 +1601,43 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
     for c in consumers:
         c.join()
 
-    return signatures, comparisons, residue_coverages, residue_overlaps
+    # Create the prediction/overlap tables
+    p1 = Process(target=make_predictions,
+                 args=(dsn, schema, signatures, comparisons))
+    p1.start()
+    signatures = comparisons = None
 
-    # return (signatures, comparisons, residue_coverages, residue_overlaps,
-    #         name_organisers, taxon_organisers)
+    # Calculate similarities
+    args = ("similarities", interpro.calculate_similarities,
+            (dsn, schema, rc, ro), {})
+    p2 = Process(target=calculate_similarities,
+                 args=(dsn, schema, residue_coverages, residue_overlaps))
+    p2.start()
+    residue_coverages = residue_overlaps = None
+
+    # Export signature -> description/taxa info
+    names, taxa = dump_descr_taxa(dsn, schema, dir=dir)
+
+    # Finalise METHOD2PROTEIN table
+    t1 = Thread(target=optimise_method2protein, args=(dsn, schema))
+    t1.start()
+
+    size = names.merge(processes-2)
+    logging.info("names: {} bytes".format(size))
+
+    load_description_counts(con, schema, names)
+    names.remove()
+    logging.info("METHOD_DESC ready")
+
+    size = taxa.merge(processes-2)
+    logging.info("taxa: {} bytes".format(size))
+
+    load_taxonomy_counts(con, schema, taxa)
+    taxa.remove()
+    logging.info("METHOD_TAXA ready")
+
+    for x in (p1, p2, t1):
+        x.join()
 
 
 def copy_schema(dsn, schema):
