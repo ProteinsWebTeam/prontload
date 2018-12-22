@@ -4,6 +4,9 @@
 import cx_Oracle
 
 
+BULK_INSERT_SIZE = 100000
+
+
 class Connection(object):
     def __init__(self, dsn):
         self._dsn = dsn

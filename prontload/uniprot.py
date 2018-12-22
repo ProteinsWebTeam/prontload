@@ -4,11 +4,11 @@
 import logging
 import math
 
-from .oracledb import Connection
+from .oracledb import Connection, BULK_INSERT_SIZE
 from . import io
 
 
-def load_comments(dsn, schema, chunk_size=100000):
+def load_comments(dsn, schema):
     tables = ("CV_COMMENT_TOPIC", "COMMENT_VALUE", "PROTEIN_COMMENT")
     con = Connection(dsn)
     for table in tables:
@@ -110,8 +110,8 @@ def load_comments(dsn, schema, chunk_size=100000):
         INSERT /*+APPEND*/ INTO {}.COMMENT_VALUE (TOPIC_ID, COMMENT_ID, TEXT)
         VALUES (:1, :2, :3)
     """.format(schema)
-    for i in range(0, len(comments), chunk_size):
-        con.executemany(query, comments[i:i+chunk_size])
+    for i in range(0, len(comments), BULK_INSERT_SIZE):
+        con.executemany(query, comments[i:i+BULK_INSERT_SIZE])
         con.commit()
 
     query = """
@@ -120,8 +120,8 @@ def load_comments(dsn, schema, chunk_size=100000):
         )
         VALUES (:1, :2, :3)
     """.format(schema)
-    for i in range(0, len(protein2comment), chunk_size):
-        con.executemany(query, protein2comment[i:i+chunk_size])
+    for i in range(0, len(protein2comment), BULK_INSERT_SIZE):
+        con.executemany(query, protein2comment[i:i+BULK_INSERT_SIZE])
         con.commit()
 
     for table in tables:
@@ -129,7 +129,7 @@ def load_comments(dsn, schema, chunk_size=100000):
         con.grant("SELECT", schema, table, "INTERPRO_SELECT")
 
 
-def load_descriptions(dsn, schema, tmpdir=None, chunk_size=100000):
+def load_descriptions(dsn, schema, tmpdir=None):
     tables = ["DESC_VALUE", "PROTEIN_DESC"]
     con = Connection(dsn)
     for table in tables:
@@ -206,7 +206,7 @@ def load_descriptions(dsn, schema, tmpdir=None, chunk_size=100000):
             for accession in description["proteins"]:
                 rel_table.append((accession, desc_id))
 
-            if len(rel_table) >= chunk_size:
+            if len(rel_table) >= BULK_INSERT_SIZE:
                 con.executemany(
                     """
                     INSERT /*+ APPEND */ INTO {}.DESC_VALUE (DESC_ID, TEXT)
@@ -217,7 +217,7 @@ def load_descriptions(dsn, schema, tmpdir=None, chunk_size=100000):
                 # Commit after each transaction to avoid ORA-12838
                 con.commit()
 
-                for i in range(0, len(rel_table), chunk_size):
+                for i in range(0, len(rel_table), BULK_INSERT_SIZE):
                     con.executemany(
                         """
                         INSERT /*+ APPEND */ INTO {}.PROTEIN_DESC (
@@ -225,7 +225,7 @@ def load_descriptions(dsn, schema, tmpdir=None, chunk_size=100000):
                         )
                         VALUES (:1, :2)
                         """.format(schema),
-                        rel_table[i:i+chunk_size]
+                        rel_table[i:i+BULK_INSERT_SIZE]
                     )
                     con.commit()
 
@@ -248,7 +248,7 @@ def load_descriptions(dsn, schema, tmpdir=None, chunk_size=100000):
         )
         con.commit()
 
-    for i in range(0, len(rel_table), chunk_size):
+    for i in range(0, len(rel_table), BULK_INSERT_SIZE):
         con.executemany(
             """
             INSERT /*+ APPEND */ INTO {}.PROTEIN_DESC (
@@ -256,7 +256,7 @@ def load_descriptions(dsn, schema, tmpdir=None, chunk_size=100000):
             )
             VALUES (:1, :2)
             """.format(schema),
-            rel_table[i:i+chunk_size]
+            rel_table[i:i+BULK_INSERT_SIZE]
         )
         con.commit()
 
