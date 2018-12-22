@@ -782,6 +782,7 @@ class ProteinConsumer(Process):
 
 
 def make_predictions(dsn, schema, signatures, comparisons):
+    logging.info("making predictions")
     candidates = set()
     non_prosite_candidates = set()
     con = Connection(dsn)
@@ -1125,9 +1126,11 @@ def make_predictions(dsn, schema, signatures, comparisons):
     )
     con.optimise_table(schema, "METHOD_OVERLAP", cascade=True)
     con.grant("SELECT", schema, "METHOD_OVERLAP", "INTERPRO_SELECT")
+    logging.info("predictions done")
 
 
 def calculate_similarities(dsn, schema, coverages, overlaps):
+    logging.info("calculating similarities")
     con = Connection(dsn)
     con.drop_table(schema, "METHOD_SIMILARITY")
     con.execute(
@@ -1184,9 +1187,13 @@ def calculate_similarities(dsn, schema, coverages, overlaps):
         PRIMARY KEY (METHOD_AC1, METHOD_AC2)
         """.format(schema)
     )
+    con.optimise_table(schema, "METHOD_SIMILARITY", cascade=True)
+    con.grant("SELECT", schema, "METHOD_SIMILARITY", "INTERPRO_SELECT")
+    logging.info("similarities done")
 
 
 def optimise_method2protein(dsn, schema):
+    logging.info("optimising METHOD2PROTEIN")
     con = Connection(dsn)
     con.execute(
         """
@@ -1226,6 +1233,7 @@ def optimise_method2protein(dsn, schema):
 
     con.optimise_table(schema, "METHOD2PROTEIN", cascade=True)
     con.grant("SELECT", schema, "METHOD2PROTEIN", "INTERPRO_SELECT")
+    logging.info("METHOD2PROTEIN ready")
 
 
 def load_description_counts(con: Connection, schema: str, organiser: io.Organiser):
@@ -1608,8 +1616,6 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
     signatures = comparisons = None
 
     # Calculate similarities
-    args = ("similarities", interpro.calculate_similarities,
-            (dsn, schema, rc, ro), {})
     p2 = Process(target=calculate_similarities,
                  args=(dsn, schema, residue_coverages, residue_overlaps))
     p2.start()

@@ -129,7 +129,7 @@ def cli():
         },
 
         # In the main thread
-        "predictions": {},
+        "method2protein": {},
 
         # In the main thread
         "report": {
@@ -206,14 +206,14 @@ def cli():
     if t_proteins:
         t_proteins.join()
 
-    s = steps["predictions"]
+    s = steps["method2protein"]
     if s["run"]:
         if p_descriptions:
             # Wait until descriptions are loaded
             p_descriptions.join()
 
         exec_functions((
-            "predictions",
+            "method2protein",
             interpro.load_method2protein,
             (dsn, schema),
             dict(dir=args.tmpdir, max_gap=max_gap, processes=args.processes)
