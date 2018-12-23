@@ -781,11 +781,9 @@ class ProteinConsumer(Process):
                             overlaps[acc_1][acc_2] += o
 
 
-def make_predictions(dsn, schema, signatures, comparisons):
-    logging.info("making predictions")
+def make_predictions(con, schema, signatures, comparisons):
     candidates = set()
     non_prosite_candidates = set()
-    con = Connection(dsn)
     for method_acc, dbcode in con.get(
             """
             SELECT METHOD_AC, DBCODE
@@ -1126,12 +1124,9 @@ def make_predictions(dsn, schema, signatures, comparisons):
     )
     con.optimise_table(schema, "METHOD_OVERLAP", cascade=True)
     con.grant("SELECT", schema, "METHOD_OVERLAP", "INTERPRO_SELECT")
-    logging.info("predictions done")
 
 
-def calculate_similarities(dsn, schema, coverages, overlaps):
-    logging.info("calculating similarities")
-    con = Connection(dsn)
+def calculate_similarities(con, schema, coverages, overlaps):
     con.drop_table(schema, "METHOD_SIMILARITY")
     con.execute(
         """
@@ -1189,7 +1184,6 @@ def calculate_similarities(dsn, schema, coverages, overlaps):
     )
     con.optimise_table(schema, "METHOD_SIMILARITY", cascade=True)
     con.grant("SELECT", schema, "METHOD_SIMILARITY", "INTERPRO_SELECT")
-    logging.info("similarities done")
 
 
 def optimise_method2protein(dsn, schema):
@@ -1299,6 +1293,7 @@ def load_description_counts(con: Connection, schema: str, organiser: io.Organise
     )
     con.optimise_table(schema, "METHOD_DESC", cascade=True)
     con.grant("SELECT", schema, "METHOD_DESC", "INTERPRO_SELECT")
+    logging.info("METHOD_DESC ready")
 
 
 def load_taxonomy_counts(con: Connection, schema: str, organiser: io.Organiser):
@@ -1370,12 +1365,11 @@ def load_taxonomy_counts(con: Connection, schema: str, organiser: io.Organiser):
     )
     con.optimise_table(schema, "METHOD_TAXA", cascade=True)
     con.grant("SELECT", schema, "METHOD_TAXA", "INTERPRO_SELECT")
+    logging.info("METHOD_TAXA ready")
 
 
-def dump_descr_taxa(dsn: str, schema: str, bucket_size: int=1000,
+def dump_descr_taxa(con: Connection, schema: str, bucket_size: int=1000,
                     dir: str=None, sync_frequency: int=1000000) -> tuple:
-    con = Connection(dsn)
-
     # Chunk signatures
     accessions = []
     cnt = bucket_size
@@ -1610,40 +1604,36 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
         c.join()
 
     # Create the prediction/overlap tables
-    p1 = Process(target=make_predictions,
-                 args=(dsn, schema, signatures, comparisons))
-    p1.start()
+    logging.info("making predictions")
+    make_predictions(con, schema, signatures, comparisons)
     signatures = comparisons = None
 
     # Calculate similarities
-    p2 = Process(target=calculate_similarities,
-                 args=(dsn, schema, residue_coverages, residue_overlaps))
-    p2.start()
+    logging.info("calculating similarities")
+    calculate_similarities(con, schema, residue_coverages, residue_overlaps)
     residue_coverages = residue_overlaps = None
 
     # Export signature -> description/taxa info
+    logging.info("dumping descriptions/taxa")
     names, taxa = dump_descr_taxa(dsn, schema, dir=dir)
 
     # Finalise METHOD2PROTEIN table
     t1 = Thread(target=optimise_method2protein, args=(dsn, schema))
     t1.start()
 
-    size = names.merge(processes-2)
+    size = names.merge(processes)
     logging.info("names: {} bytes".format(size))
 
     load_description_counts(con, schema, names)
     names.remove()
-    logging.info("METHOD_DESC ready")
 
-    size = taxa.merge(processes-2)
+    size = taxa.merge(processes)
     logging.info("taxa: {} bytes".format(size))
 
     load_taxonomy_counts(con, schema, taxa)
     taxa.remove()
-    logging.info("METHOD_TAXA ready")
 
-    for x in (p1, p2, t1):
-        x.join()
+    t1.join()
 
 
 def copy_schema(dsn, schema):
