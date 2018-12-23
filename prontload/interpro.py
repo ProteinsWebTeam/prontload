@@ -363,23 +363,12 @@ def load_taxa(dsn, schema):
     con.grant("SELECT", schema, "LINEAGE", "INTERPRO_SELECT")
 
 
-def chunk_signatures(con, schema, size=1000):
-    accessions = []
-    cnt = size
-    for row in con.get(
-        """
-            SELECT METHOD_AC
-            FROM {}.METHOD
-            ORDER BY METHOD_AC
-        """.format(schema)
-    ):
-        if cnt == size:
-            accessions.append(row[0])
-            cnt = 1
-        else:
-            cnt += 1
+def create_buckets(keys: list, bucket_size: int=1000) -> list:
+    _keys = []
+    for i in range(0, len(keys), bucket_size):
+        _keys.append(keys[i])
 
-    return accessions
+    return _keys
 
 
 class ProteinConsumer(Process):
@@ -397,41 +386,65 @@ class ProteinConsumer(Process):
 
         # Get signatures
         signature_info = {}
+        accessions = []
+        bucket_size = 1000
+        cnt = bucket_size
         for acc, dbcode, s_type in con.get(
             """
-                SELECT METHOD_AC, DBCODE, SIG_TYPE
-                FROM {}.METHOD
+            SELECT METHOD_AC, DBCODE, SIG_TYPE
+            FROM {}.METHOD
+            ORDER BY METHOD_AC
             """.format(self.schema)
         ):
             signature_info[acc] = (dbcode, s_type)
+            if cnt == bucket_size:
+                accessions.append(acc)
+                cnt = 1
+            else:
+                cnt += 1
+
+        # Creating organisers
+        buckets_keys = create_buckets(accessions)
+        names = io.Organiser(buckets_keys, dir=self.dir)
+        taxa = io.Organiser(buckets_keys, dir=self.dir)
 
         signatures = {}
         comparisons = {}
-        residue_coverages = {}
-        residue_overlaps = {}
+        res_coverages = {}
+        res_overlaps = {}
         data = []
         for chunk in iter(self.queue_in.get, None):
             for args in chunk:
                 protein_acc, dbcode, length, desc_id, left_num, matches = args
 
                 md5 = self.hash(matches, self.max_gap)
+                self.compare_fragments(matches, res_coverages, res_overlaps)
+
+                # Merge PANTHER and PRINTS matches, then compare matches
+                matches = self.merge_matches(matches, signature_info, length)
                 _signatures, _comparisons = self.compare(matches)
 
-                for method_acc in _signatures:
+                for signature_acc in _signatures:
+                    # Taxonomic origins
+                    taxa.add(signature_acc, left_num)
+
+                    # UniProt descriptions
+                    names.add(signature_acc, (desc_id, dbcode))
+
                     data.append((
-                        method_acc, protein_acc, dbcode,
+                        signature_acc, protein_acc, dbcode,
                         md5, length, left_num, desc_id
                     ))
 
-                    if method_acc not in signatures:
-                        signatures[method_acc] = {
+                    if signature_acc not in signatures:
+                        signatures[signature_acc] = {
                             "proteins": 0,
                             "matches": 0
                         }
 
-                    signatures[method_acc]["proteins"] += 1
-                    n_matches = _signatures[method_acc]
-                    signatures[method_acc]["matches"] += n_matches
+                    signatures[signature_acc]["proteins"] += 1
+                    n_matches = _signatures[signature_acc]
+                    signatures[signature_acc]["matches"] += n_matches
 
                 # _comparisons: match overlaps between signatures
                 for acc_1 in _comparisons:
@@ -480,8 +493,8 @@ class ProteinConsumer(Process):
                         if prot_over:
                             comp["prot_over"] += 1
 
-                self.compare_fragments(matches, residue_coverages,
-                                       residue_overlaps)
+            names.dump()
+            taxa.dump()
 
             while len(data) >= BULK_INSERT_SIZE:
                 con.executemany(
@@ -510,11 +523,18 @@ class ProteinConsumer(Process):
             )
             con.commit()
 
+        size = names.merge()
+        logging.info("names: {} bytes".format(size))
+        size = taxa.merge()
+        logging.info("taxa: {} bytes".format(size))
+
         self.queue_out.put((
             signatures,
             comparisons,
             residue_coverages,
             residue_overlaps,
+            name,
+            taxa
         ))
 
     @staticmethod
@@ -560,7 +580,7 @@ class ProteinConsumer(Process):
         return result
 
     @staticmethod
-    def compare(matches):
+    def compare(matches: list) -> tuple:
         comparisons = {}
         signatures = {}
 
@@ -604,14 +624,14 @@ class ProteinConsumer(Process):
         return signatures, comparisons
 
     @staticmethod
-    def hash(matches, max_gap):
+    def hash(matches: list, max_gap: int) -> str:
         # flatten matches
         locations = []
 
         # Fourth item is fragments_str, which is not used here
-        for method_ac, pos_start, pos_end, _ in matches:
-            locations.append((pos_start, method_ac))
-            locations.append((pos_end, method_ac))
+        for acc, pos_start, pos_end, _ in matches:
+            locations.append((pos_start, acc))
+            locations.append((pos_end, acc))
 
         """
         Evaluate the protein's match structure,
@@ -648,20 +668,20 @@ class ProteinConsumer(Process):
         # overall match structure
         structure = []
         # close signatures (less than max_gap between two positions)
-        methods = []
+        signatures = []
 
-        for pos, method_ac in sorted(locations):
+        for pos, acc in locations:
             if pos > offset + max_gap:
-                for _pos, _ac in methods:
+                for _pos, _ac in signatures:
                     structure.append(_ac)
 
+                signatures = []
                 structure.append('')  # add a gap
-                methods = []
 
             offset = pos
-            methods.append((pos, method_ac))
+            signatures.append((pos, acc))
 
-        for _pos, _ac in methods:
+        for _pos, _ac in signatures:
             structure.append(_ac)
 
         return hashlib.md5(
@@ -669,12 +689,17 @@ class ProteinConsumer(Process):
         ).hexdigest()
 
     @staticmethod
-    def compare_fragments(matches, residues, overlaps):
+    def compare_fragments(matches: list, residues: dict, overlaps: dict):
         # Parse the fragments string
-        fragments = []
-        for method_acc, start, end, fragments_str in matches:
+        signatures = {}
+        for acc, start, end, fragments_str in matches:
+            if acc in signatures:
+                fragments = signatures[acc]
+            else:
+                fragments = signatures[acc] = []
+
             if fragments_str is None:
-                fragments.append((method_acc, start, end))
+                fragments.append((start, end))
             else:
                 # Discontinuous domains
                 fallback = True
@@ -693,23 +718,17 @@ class ProteinConsumer(Process):
                     if pos_start < pos_end:
                         # At least one well formated discontinuous domain
                         fallback = False
-                        fragments.append((method_acc, pos_start, pos_end))
+                        fragments.append((pos_start, pos_end))
 
                 if fallback:
                     # Fallback to match start/end positions
-                    fragments.append((method_acc, start, end))
+                    fragments.append((start, end))
 
-        # Sort by positions
-        fragments.sort(key=lambda x: (x[1], x[2]))
+        # Sort fragments by position
+        for fragments in signatures.values():
+            fragments.sort()
 
-        # Group sorted fragments by signature
-        signatures = {}
-        for method_acc, start, end in fragments:
-            if method_acc in signatures:
-                signatures[method_acc].append((start, end))
-            else:
-                signatures[method_acc] = [(start, end)]
-
+        # Evaluate overlap between all signatures
         for acc_1 in signatures:
             # number of residues covered by the signature matches
             _residues = sum([e - s + 1 for s, e in signatures[acc_1]])
@@ -741,6 +760,7 @@ class ProteinConsumer(Process):
 
 
 def make_predictions(con, schema, signatures, comparisons):
+    logging.info("making predictions")
     candidates = set()
     non_prosite_candidates = set()
     for method_acc, dbcode in con.get(
@@ -1083,9 +1103,11 @@ def make_predictions(con, schema, signatures, comparisons):
     )
     con.optimise_table(schema, "METHOD_OVERLAP", cascade=True)
     con.grant("SELECT", schema, "METHOD_OVERLAP", "INTERPRO_SELECT")
+    logging.info("predictions done")
 
 
 def calculate_similarities(con, schema, coverages, overlaps):
+    logging.info("calculating similarities")
     con.drop_table(schema, "METHOD_SIMILARITY")
     con.execute(
         """
@@ -1143,6 +1165,7 @@ def calculate_similarities(con, schema, coverages, overlaps):
     )
     con.optimise_table(schema, "METHOD_SIMILARITY", cascade=True)
     con.grant("SELECT", schema, "METHOD_SIMILARITY", "INTERPRO_SELECT")
+    logging.info("similarities done")
 
 
 def optimise_method2protein(dsn, schema):
@@ -1189,7 +1212,10 @@ def optimise_method2protein(dsn, schema):
     logging.info("METHOD2PROTEIN ready")
 
 
-def load_description_counts(con: Connection, schema: str, organiser: io.Organiser):
+def load_description_counts(dsn: str, schema: str, organisers: list):
+    logging.info("creating METHOD_DESC")
+
+    con = Connection(dsn)
     con.drop_table(schema, "METHOD_DESC")
     con.execute(
         """
@@ -1204,7 +1230,7 @@ def load_description_counts(con: Connection, schema: str, organiser: io.Organise
     )
 
     signatures = {}
-    for acc, descriptions in organiser:
+    for acc, descriptions in heapq.merge(*organisers, key=lambda x: x[0]):
         if acc in signatures:
             s = signatures[acc]
         else:
@@ -1217,7 +1243,7 @@ def load_description_counts(con: Connection, schema: str, organiser: io.Organise
             s[desc_id][dbcode] += 1
 
     data = []
-    for method_acc, descriptions in signatures.items():
+    for acc, descriptions in signatures.items():
         for desc_id, dbcodes in descriptions.items():
             data.append((method_acc, desc_id, dbcodes['S'], dbcodes['T']))
 
@@ -1255,7 +1281,10 @@ def load_description_counts(con: Connection, schema: str, organiser: io.Organise
     logging.info("METHOD_DESC ready")
 
 
-def load_taxonomy_counts(con: Connection, schema: str, organiser: io.Organiser):
+def load_taxonomy_counts(dsn: str, schema: str, organisers: list):
+    logging.info("creating METHOD_TAXA")
+
+    con = Connection(dsn)
     con.drop_table(schema, "METHOD_TAXA")
     con.execute(
         """
@@ -1269,24 +1298,45 @@ def load_taxonomy_counts(con: Connection, schema: str, organiser: io.Organiser):
         """.format(schema)
     )
 
+    # Get lineages for the METHOD_TAXA table
+    lineages = {}
+    for left_num, tax_id, rank in con.get(
+        """
+        SELECT LEFT_NUMBER, TAX_ID, RANK
+        FROM {}.LINEAGE
+        WHERE RANK IN (
+          'superkingdom', 'kingdom', 'phylum', 'class', 'order',
+          'family', 'genus', 'species'
+        )
+        """.format(schema)
+    ):
+        if left_num in lineages:
+            lineages[left_num][rank] = tax_id
+        else:
+            lineages[left_num] = {rank: tax_id}
+
     signatures = {}
-    for acc, taxa in organiser:
+    for acc, left_numbers in heapq.merge(*organisers, key=lambda x: x[0]):
         if acc in signatures:
             s = signatures[acc]
         else:
             s = signatures[acc] = {}
 
-        for rank, tax_id in taxa:
-            if rank in s:
-                r = s[rank]
-            else:
-                r = s[rank] = {}
+        for left_num in left_numbers:
+            ranks = lineages.get(left_num, {"no rank": -1})
 
-            if tax_id in r:
-                r[tax_id] += 1
-            else:
-                r[tax_id] = 1
+            for rank, tax_id in ranks.items():
+                if rank in s:
+                    r = s[rank]
+                else:
+                    r = s[rank] = {}
 
+                if tax_id in r:
+                    r[tax_id] += 1
+                else:
+                    r[tax_id] = 1
+
+    lineages = None
     data = []
     for method_acc, ranks in signatures.items():
         for rank, taxa in ranks.items():
@@ -1325,82 +1375,6 @@ def load_taxonomy_counts(con: Connection, schema: str, organiser: io.Organiser):
     con.optimise_table(schema, "METHOD_TAXA", cascade=True)
     con.grant("SELECT", schema, "METHOD_TAXA", "INTERPRO_SELECT")
     logging.info("METHOD_TAXA ready")
-
-
-def dump_descr_taxa(con: Connection, schema: str, bucket_size: int=1000,
-                    dir: str=None, sync_frequency: int=1000000) -> tuple:
-    # Chunk signatures
-    accessions = []
-    cnt = bucket_size
-    for row in con.get(
-        """
-        SELECT METHOD_AC
-        FROM {}.METHOD
-        ORDER BY METHOD_AC
-        """.format(schema)
-    ):
-        if cnt == bucket_size:
-            accessions.append(row[0])
-            cnt = 1
-        else:
-            cnt += 1
-
-    # Get lineages
-    left_numbers = {}
-    for left_num, tax_id, rank in con.get(
-            """
-            SELECT LEFT_NUMBER, TAX_ID, RANK
-            FROM {}.LINEAGE
-            WHERE RANK IN (
-              'superkingdom', 'kingdom', 'phylum', 'class', 'order',
-              'family', 'genus', 'species'
-            )
-            """.format(schema)
-    ):
-        if left_num in left_numbers:
-            left_numbers[left_num][rank] = tax_id
-        else:
-            left_numbers[left_num] = {rank: tax_id}
-
-    names = io.Organiser(accessions, dir=dir)
-    taxa = io.Organiser(accessions, dir=dir)
-
-    cnt = 0
-    ts = time.time()
-    for acc, left_num, descr_id, dbcode in con.get(
-        """
-        SELECT METHOD_AC, DESC_ID, DBCODE, LEFT_NUMBER
-        FROM {}.METHOD2PROTEIN
-        """.format(schema)
-    ):
-        # UniProt descriptions
-        names.add(acc, (descr_id, dbcode))
-
-        # Taxonomic origins
-        ranks = left_numbers.get(left_num, {"no rank": -1})
-        for rank, tax_id in ranks.items():
-            taxa.add(acc, (rank, tax_id))
-
-        cnt += 1
-        if not cnt % sync_frequency:
-            names.dump()
-            taxa.dump()
-
-        if not cnt % 10000000:
-            logging.info("{:>12} ({:.0f} rows/sec)".format(
-                cnt,
-                cnt / (time.time() - ts)
-            ))
-
-    names.dump()
-    taxa.dump()
-    left_numbers = None
-    logging.info("{:>12} ({:.0f} rows/sec)".format(
-        cnt,
-        cnt / (time.time() - ts)
-    ))
-
-    return names, taxa
 
 
 def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
@@ -1451,7 +1425,7 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
     _p_acc = None
     p_length = None
     p_dbcode = None
-    descr_id = None
+    desc_id = None
     left_num = None
     matches = []
     chunk = []
@@ -1462,7 +1436,7 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
         if p_acc != _p_acc:
             if _p_acc:
                 # Add protein to chunk
-                chunk.append((_p_acc, p_dbcode, p_length, descr_id, left_num,
+                chunk.append((_p_acc, p_dbcode, p_length, desc_id, left_num,
                               matches))
 
                 if len(chunk) == chunk_size:
@@ -1475,7 +1449,7 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
 
             p_length = row[1]
             p_dbcode = row[2]
-            descr_id = row[3]
+            desc_id = row[3]
             left_num = row[4]
             matches = []
             _p_acc = p_acc
@@ -1490,7 +1464,7 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
 
     if _p_acc:
         # Last protein (_p_acc is None only if 0 proteins)
-        chunk.append((_p_acc, p_dbcode, p_length, descr_id, left_num,
+        chunk.append((_p_acc, p_dbcode, p_length, desc_id, left_num,
                       matches))
         task_queue.put(chunk)
         cnt += 1
@@ -1511,8 +1485,12 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
     residue_coverages = {}
     # residue overlap between two signatures
     residue_overlaps = {}
+    # names organisers
+    names = []
+    # taxa organisers
+    taxa = []
     for _ in consumers:
-        s, c, rc, ro = done_queue.get()
+        s, c, rc, ro, n, t = done_queue.get()
 
         # Merge dictionaries
         for acc in s:
@@ -1552,40 +1530,35 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
             else:
                 residue_overlaps[acc_1] = ro[acc_1]
 
+        names.append(n)
+        taxa.append(t)
+
     for c in consumers:
         c.join()
 
     # Create the prediction/overlap tables
-    logging.info("making predictions")
     make_predictions(con, schema, signatures, comparisons)
     signatures = comparisons = None
 
     # Calculate similarities
-    logging.info("calculating similarities")
     calculate_similarities(con, schema, residue_coverages, residue_overlaps)
     residue_coverages = residue_overlaps = None
 
-    # Export signature -> description/taxa info
-    logging.info("dumping descriptions/taxa")
-    names, taxa = dump_descr_taxa(dsn, schema, dir=dir)
-
-    # Finalise METHOD2PROTEIN table
     t1 = Thread(target=optimise_method2protein, args=(dsn, schema))
-    t1.start()
+    p1 = Process(target=load_description_counts, args=(dsn, schema, names))
+    p2 = Process(target=load_taxonomy_counts, args=(dsn, schema, taxa))
 
-    size = names.merge(processes)
-    logging.info("names: {} bytes".format(size))
+    for x in (t1, p1, p2):
+        x.start()
 
-    load_description_counts(con, schema, names)
-    names.remove()
+    for x in (t1, p1, p2):
+        x.join()
 
-    size = taxa.merge(processes)
-    logging.info("taxa: {} bytes".format(size))
+    for o in names:
+        o.remove()
 
-    load_taxonomy_counts(con, schema, taxa)
-    taxa.remove()
-
-    t1.join()
+    for o in taxa:
+        o.remove()
 
 
 def copy_schema(dsn, schema):
