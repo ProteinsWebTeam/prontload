@@ -363,14 +363,6 @@ def load_taxa(dsn, schema):
     con.grant("SELECT", schema, "LINEAGE", "INTERPRO_SELECT")
 
 
-def create_buckets(keys: list, bucket_size: int=1000) -> list:
-    _keys = []
-    for i in range(0, len(keys), bucket_size):
-        _keys.append(keys[i])
-
-    return _keys
-
-
 class ProteinConsumer(Process):
     def __init__(self, dsn, schema, max_gap, queue_in, queue_out, dir=None):
         super().__init__()
@@ -397,6 +389,7 @@ class ProteinConsumer(Process):
             """.format(self.schema)
         ):
             signature_info[acc] = (dbcode, s_type)
+            accessions.append(acc)
             if cnt == bucket_size:
                 accessions.append(acc)
                 cnt = 1
@@ -404,9 +397,8 @@ class ProteinConsumer(Process):
                 cnt += 1
 
         # Creating organisers
-        buckets_keys = create_buckets(accessions)
-        names = io.Organiser(buckets_keys, dir=self.dir)
-        taxa = io.Organiser(buckets_keys, dir=self.dir)
+        names = io.Organiser(accessions, dir=self.dir)
+        taxa = io.Organiser(accessions, dir=self.dir)
 
         signatures = {}
         comparisons = {}
