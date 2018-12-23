@@ -584,8 +584,7 @@ class ProteinConsumer(Process):
         comparisons = {}
         signatures = {}
 
-        # Fourth item is fragments_str, which is not used here
-        for m1_acc, m1_start, m1_end, _ in matches:
+        for m1_acc, m1_start, m1_end in matches:
             m1_len = m1_end - m1_start + 1
 
             if m1_acc in signatures:
@@ -595,7 +594,7 @@ class ProteinConsumer(Process):
                 signatures[m1_acc] = 1
                 m1 = comparisons[m1_acc] = {}
 
-            for m2_acc, m2_start, m2_end, _ in matches:
+            for m2_acc, m2_start, m2_end in matches:
                 if m1_acc > m2_acc:
                     continue
                 elif m2_acc in m1:
