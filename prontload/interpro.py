@@ -1414,7 +1414,7 @@ def dump_descr_taxa(dsn: str, schema: str, bucket_size: int=1000,
 
     cnt = 0
     ts = time.time()
-    for acc, left_num, desc_id, dbcode, descr_id in con.get(
+    for acc, left_num, descr_id, dbcode in con.get(
         """
         SELECT METHOD_AC, DESC_ID, DBCODE, LEFT_NUMBER
         FROM {}.METHOD2PROTEIN
@@ -1426,7 +1426,7 @@ def dump_descr_taxa(dsn: str, schema: str, bucket_size: int=1000,
         # Taxonomic origins
         ranks = left_numbers.get(left_num, {"no rank": -1})
         for rank, tax_id in ranks.items():
-            taxa.add(method_acc, (rank, tax_id))
+            taxa.add(acc, (rank, tax_id))
 
         cnt += 1
         if not cnt % sync_frequency:
