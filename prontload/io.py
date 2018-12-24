@@ -78,7 +78,7 @@ class Organiser(object):
                             else:
                                 data[key] = value
 
-        with gzip.open(b["path"], "wb") as fh:
+        with gzip.open(bucket["path"], "wb") as fh:
             for key in sorted(data):
                 pickle.dump((key, data[key]), fh)
 
