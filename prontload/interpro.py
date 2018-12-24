@@ -523,8 +523,8 @@ class ProteinConsumer(Process):
         self.queue_out.put((
             signatures,
             comparisons,
-            residue_coverages,
-            residue_overlaps,
+            res_coverages,
+            res_overlaps,
             name,
             taxa
         ))
