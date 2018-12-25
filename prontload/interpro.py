@@ -525,7 +525,7 @@ class ProteinConsumer(Process):
             comparisons,
             res_coverages,
             res_overlaps,
-            name,
+            names,
             taxa
         ))
 
