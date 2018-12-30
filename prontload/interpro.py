@@ -1236,7 +1236,7 @@ def load_description_counts(dsn: str, schema: str, organisers: list):
     data = []
     for acc, descriptions in signatures.items():
         for desc_id, dbcodes in descriptions.items():
-            data.append((method_acc, desc_id, dbcodes['S'], dbcodes['T']))
+            data.append((acc, desc_id, dbcodes['S'], dbcodes['T']))
 
             if len(data) == BULK_INSERT_SIZE:
                 con.executemany(
