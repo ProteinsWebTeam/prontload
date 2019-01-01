@@ -188,16 +188,16 @@ def cli():
 
     s = steps["proteins"]
     if s["run"]:
-        args = ("proteins", s["func"], s["args"], s.get("kwargs", {}))
-        t_proteins = Thread(target=exec_functions, args=(args,))
+        _args = ("proteins", s["func"], s["args"], s.get("kwargs", {}))
+        t_proteins = Thread(target=exec_functions, args=(_args,))
         t_proteins.start()
     else:
         t_proteins = None
 
     s = steps["descriptions"]
     if s["run"]:
-        args = ("descriptions", s["func"], s["args"], s.get("kwargs", {}))
-        p_descriptions = Process(target=exec_functions, args=(args,))
+        _args = ("descriptions", s["func"], s["args"], s.get("kwargs", {}))
+        p_descriptions = Process(target=exec_functions, args=(_args,))
         p_descriptions.start()
     else:
         p_descriptions = None
