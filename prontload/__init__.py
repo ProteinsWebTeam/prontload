@@ -129,7 +129,15 @@ def cli():
         },
 
         # In the main thread
-        "method2protein": {},
+        "method2protein": {
+            "func": interpro.load_method2protein,
+            "args": (dsn, schema),
+            "kwargs": {
+                "dir": args.tmpdir,
+                "max_gap": max_gap,
+                "processes": args.processes
+            }
+        },
 
         # In the main thread
         "report": {
@@ -212,22 +220,18 @@ def cli():
             # Wait until descriptions are loaded
             p_descriptions.join()
 
-        exec_functions((
-            "method2protein",
-            interpro.load_method2protein,
-            (dsn, schema),
-            dict(dir=args.tmpdir, max_gap=max_gap, processes=args.processes)
-        ))
+        exec_functions(("method2protein", s["func"], s["args"],
+                        s.get("kwargs", {})))
     elif p_descriptions:
         p_descriptions.join()
 
     t_group.join()
 
+    group = []
     for name in ("report", "copy"):
         s = steps[name]
         if s["run"]:
-            logging.info("{:<20}running".format(name))
-            s["func"](*s["args"], **s.get("kwargs", {}))
-            logging.info("{:<20}done".format(name))
+            group.append((name, s["func"], s["args"], s.get("kwargs", {})))
+    exec_functions(*group)
 
     logging.info("complete")
