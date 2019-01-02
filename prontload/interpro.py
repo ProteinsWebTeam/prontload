@@ -1433,7 +1433,7 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
                     chunk = []
             else:
                 logger.debug("method2protein      query time: "
-                             "{:.0f seconds}".format(time.time()-ts))
+                             "{:.0f} seconds".format(time.time()-ts))
                 ts = time.time()
 
             p_length = row[1]
