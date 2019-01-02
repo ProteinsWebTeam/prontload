@@ -59,9 +59,6 @@ def cli():
     parser.add_argument("-v", "--version", action="version",
                         version="%(prog)s {}".format(__version__),
                         help="show the version and quit")
-    parser.add_argument("-v", "--version", action="version",
-                        version="%(prog)s {}".format(__version__),
-                        help="show the version and quit")
     parser.add_argument("--verbose",
                         help="display additional logging messages",
                         action="store_const", const=logging.DEBUG,
