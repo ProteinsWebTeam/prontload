@@ -5,18 +5,24 @@ __version__ = "0.4.5"
 
 import logging
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
+
+def get_logger(name: str="prontload") -> logging.Logger:
+    logger = logging.getLogger(name)
+    if not logger.handlers:
+        ch = logging.StreamHandler()
+        ch.setFormatter(logging.Formatter(fmt="%(asctime)s: %(message)s",
+                                          datefmt="%Y-%m-%d %H:%M:%S"))
+        logger.addHandler(ch)
+    return logger
 
 
 def exec_functions(*args):
+    logger = get_logger()
+
     for name, func, f_args, f_kwargs in args:
-        logging.info("{:<20}running".format(name))
+        logger.info("{:<20}running".format(name))
         func(*f_args, **f_kwargs)
-        logging.info("{:<20}done".format(name))
+        logger.info("{:<20}done".format(name))
 
 
 def cli():
@@ -53,9 +59,17 @@ def cli():
     parser.add_argument("-v", "--version", action="version",
                         version="%(prog)s {}".format(__version__),
                         help="show the version and quit")
+    parser.add_argument("-v", "--version", action="version",
+                        version="%(prog)s {}".format(__version__),
+                        help="show the version and quit")
+    parser.add_argument("--verbose",
+                        help="display additional logging messages",
+                        action="store_const", const=logging.DEBUG,
+                        default=logging.INFO)
     args = parser.parse_args()
 
     os.makedirs(args.tmpdir, exist_ok=True)
+    get_logger().setLevel(args.verbose)
 
     with open(args.config, "rt") as fh:
         config = json.load(fh)

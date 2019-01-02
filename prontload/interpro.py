@@ -3,13 +3,14 @@
 
 import hashlib
 import heapq
-import logging
 import time
 from multiprocessing import Process, Queue
 from threading import Thread
 
-from . import io
+from . import get_logger, io
 from .oracledb import Connection, BULK_INSERT_SIZE
+
+logger = get_logger()
 
 
 def create_synonyms(dsn, src, dst):
@@ -382,11 +383,11 @@ class ProteinConsumer(Process):
         bucket_size = 1000
         cnt = bucket_size
         for acc, dbcode, s_type in con.get(
-            """
-            SELECT METHOD_AC, DBCODE, SIG_TYPE
-            FROM {}.METHOD
-            ORDER BY METHOD_AC
-            """.format(self.schema)
+                """
+                SELECT METHOD_AC, DBCODE, SIG_TYPE
+                FROM {}.METHOD
+                ORDER BY METHOD_AC
+                """.format(self.schema)
         ):
             signature_info[acc] = (dbcode, s_type)
             accessions.append(acc)
@@ -515,18 +516,15 @@ class ProteinConsumer(Process):
             )
             con.commit()
 
-        size = names.merge()
-        logging.info("names: {} bytes".format(size))
-        size = taxa.merge()
-        logging.info("taxa: {} bytes".format(size))
-
+        size = names.merge() + taxa.merge()
         self.queue_out.put((
             signatures,
             comparisons,
             res_coverages,
             res_overlaps,
             names,
-            taxa
+            taxa,
+            size
         ))
 
     @staticmethod
@@ -751,7 +749,7 @@ class ProteinConsumer(Process):
 
 
 def make_predictions(con, schema, signatures, comparisons):
-    logging.info("making predictions")
+    logger.debug("method2protein      making predictions")
     candidates = set()
     non_prosite_candidates = set()
     for method_acc, dbcode in con.get(
@@ -1094,11 +1092,11 @@ def make_predictions(con, schema, signatures, comparisons):
     )
     con.optimise_table(schema, "METHOD_OVERLAP", cascade=True)
     con.grant("SELECT", schema, "METHOD_OVERLAP", "INTERPRO_SELECT")
-    logging.info("predictions done")
+    logger.debug("method2protein      predictions done")
 
 
 def calculate_similarities(con, schema, coverages, overlaps):
-    logging.info("calculating similarities")
+    logger.debug("method2protein      calculating similarities")
     con.drop_table(schema, "METHOD_SIMILARITY")
     con.execute(
         """
@@ -1156,11 +1154,11 @@ def calculate_similarities(con, schema, coverages, overlaps):
     )
     con.optimise_table(schema, "METHOD_SIMILARITY", cascade=True)
     con.grant("SELECT", schema, "METHOD_SIMILARITY", "INTERPRO_SELECT")
-    logging.info("similarities done")
+    logger.debug("method2protein      similarities done")
 
 
 def optimise_method2protein(dsn, schema):
-    logging.info("optimising METHOD2PROTEIN")
+    logger.debug("method2protein      optimising METHOD2PROTEIN")
     con = Connection(dsn)
     con.execute(
         """
@@ -1200,11 +1198,11 @@ def optimise_method2protein(dsn, schema):
 
     con.optimise_table(schema, "METHOD2PROTEIN", cascade=True)
     con.grant("SELECT", schema, "METHOD2PROTEIN", "INTERPRO_SELECT")
-    logging.info("METHOD2PROTEIN ready")
+    logger.debug("method2protein      METHOD2PROTEIN ready")
 
 
 def load_description_counts(dsn: str, schema: str, organisers: list):
-    logging.info("creating METHOD_DESC")
+    logger.debug("method2protein      creating METHOD_DESC")
 
     con = Connection(dsn)
     con.drop_table(schema, "METHOD_DESC")
@@ -1269,11 +1267,11 @@ def load_description_counts(dsn: str, schema: str, organisers: list):
     )
     con.optimise_table(schema, "METHOD_DESC", cascade=True)
     con.grant("SELECT", schema, "METHOD_DESC", "INTERPRO_SELECT")
-    logging.info("METHOD_DESC ready")
+    logger.debug("method2protein      METHOD_DESC ready")
 
 
 def load_taxonomy_counts(dsn: str, schema: str, organisers: list):
-    logging.info("creating METHOD_TAXA")
+    logger.debug("method2protein      creating METHOD_TAXA")
 
     con = Connection(dsn)
     con.drop_table(schema, "METHOD_TAXA")
@@ -1292,14 +1290,14 @@ def load_taxonomy_counts(dsn: str, schema: str, organisers: list):
     # Get lineages for the METHOD_TAXA table
     lineages = {}
     for left_num, tax_id, rank in con.get(
-        """
-        SELECT LEFT_NUMBER, TAX_ID, RANK
-        FROM {}.LINEAGE
-        WHERE RANK IN (
-          'superkingdom', 'kingdom', 'phylum', 'class', 'order',
-          'family', 'genus', 'species'
-        )
-        """.format(schema)
+            """
+            SELECT LEFT_NUMBER, TAX_ID, RANK
+            FROM {}.LINEAGE
+            WHERE RANK IN (
+              'superkingdom', 'kingdom', 'phylum', 'class', 'order',
+              'family', 'genus', 'species'
+            )
+            """.format(schema)
     ):
         if left_num in lineages:
             lineages[left_num][rank] = tax_id
@@ -1365,7 +1363,7 @@ def load_taxonomy_counts(dsn: str, schema: str, organisers: list):
     )
     con.optimise_table(schema, "METHOD_TAXA", cascade=True)
     con.grant("SELECT", schema, "METHOD_TAXA", "INTERPRO_SELECT")
-    logging.info("METHOD_TAXA ready")
+    logger.debug("method2protein      METHOD_TAXA ready")
 
 
 def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
@@ -1434,8 +1432,8 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
                     task_queue.put(chunk)
                     chunk = []
             else:
-                logging.info("query time: "
-                             "{:.0f} seconds".format(time.time()-ts))
+                logger.debug("method2protein      query time: "
+                             "{:.0f seconds}".format(time.time()-ts))
                 ts = time.time()
 
             p_length = row[1]
@@ -1446,10 +1444,12 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
             _p_acc = p_acc
             cnt += 1
             if not cnt % 10000000:
-                logging.info("{:>12} ({:.0f} proteins/sec)".format(
-                    cnt,
-                    cnt / (time.time() - ts)
-                ))
+                logger.debug(
+                    "method2protein      "
+                    "{:>12} ({:.0f} proteins/sec)".format(
+                        cnt, cnt / (time.time() - ts)
+                    )
+                )
 
         matches.append((row[5], row[6], row[7], row[8]))
 
@@ -1463,10 +1463,12 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
     for _ in consumers:
         task_queue.put(None)
 
-    logging.info("{:>12} ({:.0f} proteins/sec)".format(
-        cnt,
-        cnt / (time.time() - ts)
-    ))
+    logger.debug(
+        "method2protein      "
+        "{:>12} ({:.0f} proteins/sec)".format(
+            cnt, cnt / (time.time() - ts)
+        )
+    )
 
     # number of proteins and matches for each signatures
     signatures = {}
@@ -1480,8 +1482,11 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
     names = []
     # taxa organisers
     taxa = []
+    # temporary space used (in bytes)
+    size = 0
     for _ in consumers:
-        s, c, rc, ro, n, t = done_queue.get()
+        s, c, rc, ro, n, t, tmp = done_queue.get()
+        size += tmp
 
         # Merge dictionaries
         for acc in s:
@@ -1526,6 +1531,9 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
 
     for c in consumers:
         c.join()
+
+    logger.debug("method2protein      "
+                 "temporary disk space: {:,} bytes".format(size))
 
     # Create the prediction/overlap tables
     make_predictions(con, schema, signatures, comparisons)

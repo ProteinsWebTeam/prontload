@@ -1,11 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import logging
 import math
 
+from . import get_logger, io
 from .oracledb import Connection, BULK_INSERT_SIZE
-from . import io
+
+logger = get_logger()
 
 
 def load_comments(dsn, schema):
@@ -234,9 +235,8 @@ def load_descriptions(dsn, schema, tmpdir=None):
 
             desc_id += 1
 
-        logging.info("{:<20}temporary disk space: {:,} bytes".format(
-            "descriptions", store.size
-        ))
+        logger.debug("descriptions        temporary disk space: "
+                     "{:,} bytes".format(store.size))
 
     if cv_table:
         con.executemany(
