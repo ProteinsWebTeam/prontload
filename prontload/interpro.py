@@ -214,6 +214,8 @@ def load_signatures(dsn, schema):
             CANDIDATE CHAR(1) NOT NULL,
             DESCRIPTION VARCHAR2(220),
             SIG_TYPE CHAR(1),
+            ABSTRACT VARCHAR2(4000),
+            ABSTRACT_LONG CLOB,
             PROTEIN_COUNT NUMBER(8) DEFAULT 0 NOT NULL
         ) NOLOGGING
         """.format(schema)
@@ -222,9 +224,12 @@ def load_signatures(dsn, schema):
     con.execute(
         """
         INSERT /*+APPEND*/ INTO {}.METHOD (
-            METHOD_AC, NAME, DBCODE, CANDIDATE, DESCRIPTION, SIG_TYPE
+            METHOD_AC, NAME, DBCODE, CANDIDATE, 
+            DESCRIPTION, SIG_TYPE, ABSTRACT, ABSTRACT_LONG
         )
-        SELECT METHOD_AC, NAME, DBCODE, CANDIDATE, DESCRIPTION, SIG_TYPE
+        SELECT 
+            METHOD_AC, NAME, DBCODE, CANDIDATE, 
+            DESCRIPTION, SIG_TYPE, ABSTRACT, ABSTRACT_LONG
         FROM INTERPRO.METHOD
         """.format(schema)
     )
