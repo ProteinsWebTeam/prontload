@@ -90,6 +90,7 @@ def load_matches(dsn, schema):
     For some signature matches, the HMM model accession
         is the signature accession itself: in such cases, use NULL
     """
+    logger.debug("matches             inserting protein/feature matches")
     con.execute(
         """
         INSERT /*+APPEND*/ INTO {}.MATCH
@@ -114,6 +115,7 @@ def load_matches(dsn, schema):
     con.commit()
 
     # Finalizing table
+    logger.debug("matches             optimising MATCH")
     con.execute(
         """
         CREATE INDEX I_MATCH$PROTEIN
@@ -136,6 +138,7 @@ def load_matches(dsn, schema):
     con.grant("SELECT", schema, "MATCH", "INTERPRO_SELECT")
 
     # TODO: ensure that `METHOD` is ready
+    logger.debug("matches             counting #proteins/signature")
     signatures = {}
     for acc, num_proteins in con.get(
         """
@@ -146,6 +149,7 @@ def load_matches(dsn, schema):
     ):
         signatures[acc] = num_proteins
 
+    logger.debug("matches             updating METHOD")
     for acc, num_proteins in signatures.items():
         con.execute(
             """
