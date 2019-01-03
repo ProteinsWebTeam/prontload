@@ -136,16 +136,25 @@ def load_matches(dsn, schema):
     con.grant("SELECT", schema, "MATCH", "INTERPRO_SELECT")
 
     # TODO: ensure that `METHOD` is ready
-    con.execute(
+    signatures = {}
+    for acc, num_proteins in con.get(
         """
-        UPDATE {0}.METHOD ME
-        SET PROTEIN_COUNT = (
-            SELECT COUNT(DISTINCT PROTEIN_AC)
-            FROM {0}.MATCH MA
-            WHERE ME.METHOD_AC = MA.METHOD_AC
-        )
+        SELECT METHOD_AC, COUNT(DISTINCT PROTEIN_AC)
+        FROM {}.MATCH
+        GROUP BY METHOD_AC
         """.format(schema)
-    )
+    ):
+        signatures[acc] = num_proteins
+
+    for acc, num_proteins in signatures.items():
+        con.execute(
+            """
+            UPDATE {0}.METHOD
+            SET PROTEIN_COUNT = :1
+            WHERE METHOD_AC = :2
+            """.format(schema),
+            num_proteins, acc
+        )
     con.commit()
 
 
