@@ -184,7 +184,8 @@ def cli():
         for step in steps.values():
             step["run"] = not step.get("skip", False)
 
-    if steps["clear"]["run"]:
+    s = steps["clear"]
+    if s["run"]:
         exec_functions(("clear", s["func"], s["args"], s.get("kwargs", {})))
 
     # Start background steps in separate thread
