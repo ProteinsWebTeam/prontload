@@ -1580,26 +1580,17 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
         o.remove()
 
 
-def enable_schema(dsn, schema):
-    con = Connection(dsn)
-    con.execute(
-        """
-        UPDATE {}.CV_DATABASE
-        SET IS_READY = 'Y'
-        """.format(schema)
-    )
-    con.commit()
-
-
 def copy_schema(dsn, schema):
-    proc = "{}.copy_interpro_analysis.refresh".format(schema)
-    Connection(dsn).exec(proc)
-
-
-def import_schema(dsn, schema):
     con = Connection(dsn)
-    con.exec("interpro_analysis.drop_all")
 
+    logger.info("exporting ")
+    logger.debug("copy                exporting")
+    proc = "{}.copy_interpro_analysis.exp_interpro_analysis".format(schema)
+    con.exec(proc)
+    enable_schema(con, schema)
+
+    logger.debug("copy                importing")
+    con.exec("interpro_analysis.drop_all")
     to_drop = []
     for row in con.get(
         """
@@ -1614,10 +1605,20 @@ def import_schema(dsn, schema):
     for owner, table in to_drop:
         con.drop_table(schema, table)
 
-    proc = "{}.copy_interpro_analysis.exp_interpro_analysis".format(schema)
+    proc = "{}.copy_interpro_analysis.imp_interpro_analysis".format(schema)
     con.exec(proc)
 
     enable_schema(dsn, "INTERPRO_ANALYSIS")
+
+
+def enable_schema(con, schema):
+    con.execute(
+        """
+        UPDATE {}.CV_DATABASE
+        SET IS_READY = 'Y'
+        """.format(schema)
+    )
+    con.commit()
 
 
 def clear_schema(dsn, schema):
