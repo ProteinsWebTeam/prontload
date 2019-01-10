@@ -44,6 +44,7 @@ def load_databases(dsn, schema):
             DBSHORT VARCHAR2(10) NOT NULL,
             VERSION VARCHAR2(20),
             FILE_DATE DATE,
+            IS_READY CHAR(1) DEFAULT 'N'
             CONSTRAINT PK_DATABASE PRIMARY KEY (DBCODE)
         ) NOLOGGING
         """.format(schema)
@@ -56,7 +57,8 @@ def load_databases(dsn, schema):
         )
         SELECT DB.DBCODE, DB.DBNAME, DB.DBSHORT, V.VERSION, V.FILE_DATE
         FROM INTERPRO.CV_DATABASE DB
-        LEFT OUTER JOIN INTERPRO.DB_VERSION V ON DB.DBCODE = V.DBCODE
+        LEFT OUTER JOIN INTERPRO.DB_VERSION V 
+          ON DB.DBCODE = V.DBCODE
         """.format(schema)
     )
     con.commit()
@@ -141,11 +143,11 @@ def load_matches(dsn, schema):
     logger.debug("matches             counting #proteins/signature")
     signatures = {}
     for acc, num_proteins in con.get(
-        """
-        SELECT METHOD_AC, COUNT(DISTINCT PROTEIN_AC)
-        FROM {}.MATCH
-        GROUP BY METHOD_AC
-        """.format(schema)
+            """
+            SELECT METHOD_AC, COUNT(DISTINCT PROTEIN_AC)
+            FROM {}.MATCH
+            GROUP BY METHOD_AC
+            """.format(schema)
     ):
         signatures[acc] = num_proteins
 
@@ -1578,9 +1580,44 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
         o.remove()
 
 
+def enable_schema(dsn, schema):
+    con = Connection(dsn)
+    con.execute(
+        """
+        UPDATE {}.CV_DATABASE
+        SET IS_READY = 'Y'
+        """.format(schema)
+    )
+    con.commit()
+
+
 def copy_schema(dsn, schema):
     proc = "{}.copy_interpro_analysis.refresh".format(schema)
     Connection(dsn).exec(proc)
+
+
+def import_schema(dsn, schema):
+    con = Connection(dsn)
+    con.exec("interpro_analysis.drop_all")
+
+    to_drop = []
+    for row in con.get(
+        """
+        SELECT OWNER_NAME, JOB_NAME
+        FROM DBA_DATAPUMP_JOBS
+        WHERE STATE = 'NOT RUNNING'
+        AND ATTACHED_SESSIONS = 0
+        """
+    ):
+        to_drop.append(row)
+
+    for owner, table in to_drop:
+        con.drop_table(schema, table)
+
+    proc = "{}.copy_interpro_analysis.exp_interpro_analysis".format(schema)
+    con.exec(proc)
+
+    enable_schema(dsn, "INTERPRO_ANALYSIS")
 
 
 def clear_schema(dsn, schema):

@@ -156,9 +156,18 @@ def cli():
             "args": (dsn, schema, args.output)
         },
 
-        # After everything is done
-        "copy": {
-            "func": interpro.copy_schema,
+        "export": {
+            "func": interpro.enable_schema,
+            "args": (dsn, schema)
+        },
+
+        "enable": {
+            "func": interpro.enable_schema,
+            "args": (dsn, schema)
+        },
+
+        "import": {
+            "func": interpro.import_schema,
             "args": (dsn, schema)
         }
     }
