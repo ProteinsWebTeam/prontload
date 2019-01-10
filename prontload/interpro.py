@@ -44,7 +44,7 @@ def load_databases(dsn, schema):
             DBSHORT VARCHAR2(10) NOT NULL,
             VERSION VARCHAR2(20),
             FILE_DATE DATE,
-            IS_READY CHAR(1) DEFAULT 'N'
+            IS_READY CHAR(1) DEFAULT 'N',
             CONSTRAINT PK_DATABASE PRIMARY KEY (DBCODE)
         ) NOLOGGING
         """.format(schema)
@@ -57,7 +57,7 @@ def load_databases(dsn, schema):
         )
         SELECT DB.DBCODE, DB.DBNAME, DB.DBSHORT, V.VERSION, V.FILE_DATE
         FROM INTERPRO.CV_DATABASE DB
-        LEFT OUTER JOIN INTERPRO.DB_VERSION V 
+        LEFT OUTER JOIN INTERPRO.DB_VERSION V
           ON DB.DBCODE = V.DBCODE
         """.format(schema)
     )
@@ -239,11 +239,11 @@ def load_signatures(dsn, schema):
     con.execute(
         """
         INSERT /*+APPEND*/ INTO {}.METHOD (
-            METHOD_AC, NAME, DBCODE, CANDIDATE, 
+            METHOD_AC, NAME, DBCODE, CANDIDATE,
             DESCRIPTION, SIG_TYPE, ABSTRACT, ABSTRACT_LONG
         )
-        SELECT 
-            METHOD_AC, NAME, DBCODE, CANDIDATE, 
+        SELECT
+            METHOD_AC, NAME, DBCODE, CANDIDATE,
             DESCRIPTION, SIG_TYPE, ABSTRACT, ABSTRACT_LONG
         FROM INTERPRO.METHOD
         """.format(schema)
