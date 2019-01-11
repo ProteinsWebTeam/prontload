@@ -114,10 +114,6 @@ def cli():
         },
 
         # In main thread, one after the other
-        "synonyms": {
-            "func": interpro.create_synonyms,
-            "args": (dsn, "INTERPRO", schema)
-        },
         "signatures": {
             "func": interpro.load_signatures,
             "args": (dsn, schema),
@@ -199,7 +195,7 @@ def cli():
     t_group.start()
 
     group = []
-    for name in ("synonyms", "signatures", "taxa"):
+    for name in ("signatures", "taxa"):
         s = steps[name]
         if s["run"]:
             group.append((name, s["func"], s["args"], s.get("kwargs", {})))

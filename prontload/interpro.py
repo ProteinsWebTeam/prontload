@@ -13,25 +13,6 @@ from .oracledb import Connection, BULK_INSERT_SIZE
 logger = get_logger()
 
 
-def create_synonyms(dsn, src, dst):
-    tables = (
-        "CV_ENTRY_TYPE",
-        "ENTRY",
-        "ENTRY2METHOD",
-        "ENTRY2ENTRY",
-        "ENTRY2COMP",
-        "METHOD2SWISS_DE",
-        "METHOD_COMMENT",
-        "USER_PRONTO"
-    )
-
-    con = Connection(dsn)
-    for table_name in tables:
-        query = ("CREATE OR REPLACE SYNONYM {0}.{2} "
-                 "FOR {1}.{2}".format(dst, src, table_name))
-        con.execute(query)
-
-
 def load_databases(dsn, schema):
     con = Connection(dsn)
     con.drop_table(schema, "CV_DATABASE")
