@@ -1583,9 +1583,10 @@ def copy_schema(dsn, schema):
         to_drop.append(row)
 
     for owner, table in to_drop:
-        con.drop_table(schema, table)
+        if owner == schema:
+            con.drop_table(schema, table)
 
-    proc = "{}.copy_interpro_analysis.imp_interpro_analysis".format(schema)
+    proc = "{}.copy_interpro_analysis.imp_interpro_analysis_load".format(schema)
     con.exec(proc)
 
     enable_schema(dsn, "INTERPRO_ANALYSIS")
