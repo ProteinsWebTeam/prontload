@@ -1564,7 +1564,6 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
 def copy_schema(dsn, schema):
     con = Connection(dsn)
 
-    logger.info("exporting ")
     logger.debug("copy                exporting")
     proc = "{}.copy_interpro_analysis.exp_interpro_analysis".format(schema)
     con.exec(proc)
