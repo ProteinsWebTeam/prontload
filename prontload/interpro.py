@@ -1589,7 +1589,7 @@ def copy_schema(dsn, schema):
     proc = "{}.copy_interpro_analysis.imp_interpro_analysis_load".format(schema)
     con.exec(proc)
 
-    enable_schema(dsn, "INTERPRO_ANALYSIS")
+    enable_schema(con, "INTERPRO_ANALYSIS")
 
 
 def enable_schema(con, schema):
