@@ -20,6 +20,12 @@ Create or edit the `config.json` file to set the following settings:
 * `schema`: Oracle schema where to create/refresh tables. Be sure that the user defined in `dsn` has the right priviles (e.g. `CREATE TABLE`, `DROP ANY TABLE`, etc.).
 * `max_gap`: Used to group proteins by their match structure. Historically set to `20`.
 
+## Database links
+
+The following public database links are required:
+- `GOAPRO`
+- `SWPREAD`
+
 ## Run
 
 The only requirement argument is the path to `config.json`.
@@ -42,17 +48,17 @@ Available options are:
 | Name          | Description                                                                    |
 | ------------- |--------------------------------------------------------------------------------|
 | clear         | Drop all tables from the current schema (skipped unless explicitly called)     |
-| synonyms      | Create synonyms for InterPro tables that are updated daily by curators         |
 | databases     | Copy database info (e.g. name, version) from InterPro                          |
-| signatures    | Copy member database signatures from InterPro                                  |
-| taxa          | Copy taxonomy data from InterPro                                               |
-| proteins      | Copy proteins from InterPro                                                    |
 | comments      | Copy Swiss-Prot comments from UniProt                                          |
-| descriptions  | Copy protein descriptions from UniProt                                         |
 | enzymes       | Copy EC numbers ([ENZYME](https://enzyme.expasy.org/)) FROM UniProt            |
 | annotations   | Copy protein GO annotations from GOA                                           |
 | publications  | Copy publications from GOA                                                     |
 | terms         | Copy GO terms from GOA                                                         |
-| matches       | Copy protein matches from InterPro, and run predictions                        |
+| matches       | Copy protein matches from InterPro                                             |
+| signatures    | Copy member database signatures from InterPro                                  |
+| taxa          | Copy taxonomy data from InterPro                                               |
+| proteins      | Copy proteins from InterPro                                                    |
+| descriptions  | Copy protein descriptions from UniProt                                         |
+| method2protein| Cross member database signatures and proteins, then run descriptions           |
 | report        | Export gained/lost protein descriptions per InterPro entries                   |
 | copy          | Export the current schema to an other to prevent downtime during updates       |
