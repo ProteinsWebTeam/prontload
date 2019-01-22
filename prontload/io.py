@@ -7,7 +7,7 @@ import os
 import pickle
 from multiprocessing import Pool
 from tempfile import mkdtemp, mkstemp
-from typing import Generator, List, Optional
+from typing import List, Optional
 
 
 class Organiser(object):
