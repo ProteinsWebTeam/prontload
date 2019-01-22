@@ -156,6 +156,7 @@ def load_descriptions(dsn, schema, tmpdir=None):
         """.format(schema)
     )
 
+    logger.debug("descriptions        exporting")
     query = """
         SELECT DESCR, ACCESSION
         FROM (
@@ -199,6 +200,7 @@ def load_descriptions(dsn, schema, tmpdir=None):
                 "proteins": proteins
             })
 
+        logger.debug("descriptions        populating")
         desc_id = 1
         cv_table = []
         rel_table = []
@@ -234,6 +236,9 @@ def load_descriptions(dsn, schema, tmpdir=None):
                 rel_table = []
 
             desc_id += 1
+            if not desc_id % 100000:
+                logger.debug("descriptions        "
+                             "populating: {:>9}".format(desc_id))
 
         logger.debug("descriptions        temporary disk space: "
                      "{:,} bytes".format(store.size))
@@ -263,6 +268,7 @@ def load_descriptions(dsn, schema, tmpdir=None):
     cv_table = []
     rel_table = []
 
+    logger.debug("descriptions        adding constraints")
     con.execute(
         """
         ALTER TABLE {}.DESC_VALUE
