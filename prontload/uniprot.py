@@ -236,7 +236,7 @@ def load_descriptions(dsn, schema, tmpdir=None):
                 rel_table = []
 
             desc_id += 1
-            if not desc_id % 100000:
+            if not desc_id % 1000000:
                 logger.debug("descriptions        "
                              "populating: {:>9}".format(desc_id))
 
