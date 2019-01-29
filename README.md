@@ -36,12 +36,13 @@ prontload config.json [OPTIONS]
 
 Available options are:
 
-| Option        | Description                                                                    |
-| ------------- |--------------------------------------------------------------------------------|
-| -s, --steps   | space-separated list of steps to run (default: all)                            |
-| -t, --tmpdir  | directory for temporary files (default: `/tmp/`)                               |
-| -p, --threads | number of threads to use in the **matches** step (default/min: 3)              |
-| -o, --output  | output file for the Swiss-Prot descriptions report for curators                |
+| Option          | Description                                                                    |
+| ------------- --|--------------------------------------------------------------------------------|
+| -s, --steps     | space-separated list of steps to run (default: all)                            |
+| -t, --tmpdir    | directory for temporary files (default: `/tmp/`)                               |
+| -p, --processes | number of processes to use in the **method2protein** step (default: 1)         |
+| -o, --output    | output file for the Swiss-Prot descriptions report for curators                |
+| --verbose       | display additional (debug) logging messages                                    |
 
 ### Steps
 
