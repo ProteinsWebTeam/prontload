@@ -60,6 +60,6 @@ Available options are:
 | taxa          | Copy taxonomy data from InterPro                                               |
 | proteins      | Copy proteins from InterPro                                                    |
 | descriptions  | Copy protein descriptions from UniProt                                         |
-| method2protein| Cross member database signatures and proteins, then run descriptions           |
+| method2protein| Cross member database signatures and proteins, then run predictions            |
 | report        | Export gained/lost protein descriptions per InterPro entries                   |
 | copy          | Export the current schema to an other to prevent downtime during updates       |
