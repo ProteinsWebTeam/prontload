@@ -37,7 +37,7 @@ prontload config.json [OPTIONS]
 Available options are:
 
 | Option          | Description                                                                    |
-| ------------- --|--------------------------------------------------------------------------------|
+| ----------------|--------------------------------------------------------------------------------|
 | -s, --steps     | space-separated list of steps to run (default: all)                            |
 | -t, --tmpdir    | directory for temporary files (default: `/tmp/`)                               |
 | -p, --processes | number of processes to use in the **method2protein** step (default: 1)         |
