@@ -1,16 +1,15 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import gzip
-import json
-import os
 import math
-from tempfile import mkstemp
 
-from .oracledb import Connection
+from . import get_logger, io
+from .oracledb import Connection, BULK_INSERT_SIZE
+
+logger = get_logger()
 
 
-def load_comments(dsn, schema, chunk_size=100000):
+def load_comments(dsn, schema):
     tables = ("CV_COMMENT_TOPIC", "COMMENT_VALUE", "PROTEIN_COMMENT")
     con = Connection(dsn)
     for table in tables:
@@ -45,7 +44,9 @@ def load_comments(dsn, schema, chunk_size=100000):
             PROTEIN_AC VARCHAR2(15) NOT NULL,
             TOPIC_ID NUMBER(2) NOT NULL,
             COMMENT_ID NUMBER(6) NOT NULL,
-            CONSTRAINT PK_PROTEIN_COMMENT PRIMARY KEY (PROTEIN_AC, TOPIC_ID, COMMENT_ID)
+            CONSTRAINT PK_PROTEIN_COMMENT PRIMARY KEY (
+                PROTEIN_AC, TOPIC_ID, COMMENT_ID
+            )
         ) NOLOGGING
         """.format(schema)
     )
@@ -53,10 +54,14 @@ def load_comments(dsn, schema, chunk_size=100000):
     query = """
         SELECT E.ACCESSION, B.COMMENT_TOPICS_ID, T.TOPIC, SS.TEXT
         FROM SPTR.DBENTRY@SWPREAD E
-        INNER JOIN SPTR.COMMENT_BLOCK@SWPREAD B ON E.DBENTRY_ID = B.DBENTRY_ID
-        INNER JOIN SPTR.CV_COMMENT_TOPICS@SWPREAD T ON B.COMMENT_TOPICS_ID = T.COMMENT_TOPICS_ID
-        INNER JOIN SPTR.COMMENT_STRUCTURE@SWPREAD S ON B.COMMENT_BLOCK_ID = S.COMMENT_BLOCK_ID
-        INNER JOIN SPTR.COMMENT_SUBSTRUCTURE@SWPREAD SS ON S.COMMENT_STRUCTURE_ID = SS.COMMENT_STRUCTURE_ID
+        INNER JOIN SPTR.COMMENT_BLOCK@SWPREAD B
+            ON E.DBENTRY_ID = B.DBENTRY_ID
+        INNER JOIN SPTR.CV_COMMENT_TOPICS@SWPREAD T
+            ON B.COMMENT_TOPICS_ID = T.COMMENT_TOPICS_ID
+        INNER JOIN SPTR.COMMENT_STRUCTURE@SWPREAD S
+            ON B.COMMENT_BLOCK_ID = S.COMMENT_BLOCK_ID
+        INNER JOIN SPTR.COMMENT_SUBSTRUCTURE@SWPREAD SS
+            ON S.COMMENT_STRUCTURE_ID = SS.COMMENT_STRUCTURE_ID
         WHERE E.ENTRY_TYPE = 0
         AND E.MERGE_STATUS != 'R'
         AND E.DELETED = 'N'
@@ -104,26 +109,28 @@ def load_comments(dsn, schema, chunk_size=100000):
 
     query = """
         INSERT /*+APPEND*/ INTO {}.COMMENT_VALUE (TOPIC_ID, COMMENT_ID, TEXT)
-        VALUES (:1, :2, :3)    
+        VALUES (:1, :2, :3)
     """.format(schema)
-    for i in range(0, len(comments), chunk_size):
-        con.executemany(query, comments[i:i+chunk_size])
+    for i in range(0, len(comments), BULK_INSERT_SIZE):
+        con.executemany(query, comments[i:i+BULK_INSERT_SIZE])
         con.commit()
 
     query = """
-        INSERT /*+APPEND*/ INTO {}.PROTEIN_COMMENT (PROTEIN_AC, TOPIC_ID, COMMENT_ID)
-        VALUES (:1, :2, :3)    
+        INSERT /*+APPEND*/ INTO {}.PROTEIN_COMMENT (
+            PROTEIN_AC, TOPIC_ID, COMMENT_ID
+        )
+        VALUES (:1, :2, :3)
     """.format(schema)
-    for i in range(0, len(protein2comment), chunk_size):
-        con.executemany(query, protein2comment[i:i+chunk_size])
+    for i in range(0, len(protein2comment), BULK_INSERT_SIZE):
+        con.executemany(query, protein2comment[i:i+BULK_INSERT_SIZE])
         con.commit()
 
     for table in tables:
-        con.optimize_table(schema, table, cascade=True)
+        con.optimise_table(schema, table, cascade=True)
         con.grant("SELECT", schema, table, "INTERPRO_SELECT")
 
 
-def load_descriptions(dsn, schema, tmpdir=None, chunk_size=100000):
+def load_descriptions(dsn, schema, tmpdir=None):
     tables = ["DESC_VALUE", "PROTEIN_DESC"]
     con = Connection(dsn)
     for table in tables:
@@ -135,7 +142,7 @@ def load_descriptions(dsn, schema, tmpdir=None, chunk_size=100000):
         (
             DESC_ID NUMBER(10) NOT NULL,
             TEXT VARCHAR2(4000) NOT NULL
-        ) NOLOGGING        
+        ) NOLOGGING
         """.format(schema)
     )
 
@@ -145,89 +152,123 @@ def load_descriptions(dsn, schema, tmpdir=None, chunk_size=100000):
         (
             PROTEIN_AC VARCHAR2(15) NOT NULL,
             DESC_ID NUMBER(10) NOT NULL
-        ) NOLOGGING        
+        ) NOLOGGING
         """.format(schema)
     )
 
+    logger.debug("descriptions        exporting")
     query = """
         SELECT DESCR, ACCESSION
         FROM (
           SELECT
             E.ACCESSION,
             D.DESCR,
-            ROW_NUMBER() OVER (PARTITION BY E.ACCESSION ORDER BY D.SECTION_GROUP_ID, D.DESC_ID) R
+            ROW_NUMBER() OVER (
+                PARTITION BY E.ACCESSION
+                ORDER BY D.SECTION_GROUP_ID, D.DESC_ID
+            ) R
           FROM SPTR.DBENTRY@SWPREAD E
-            LEFT OUTER JOIN SPTR.DBENTRY_2_DESC@SWPREAD D ON E.DBENTRY_ID = D.DBENTRY_ID
+          LEFT OUTER JOIN SPTR.DBENTRY_2_DESC@SWPREAD D
+            ON E.DBENTRY_ID = D.DBENTRY_ID
           WHERE E.ENTRY_TYPE IN (0, 1)
                 AND E.MERGE_STATUS != 'R'
                 AND E.DELETED = 'N'
                 AND E.FIRST_PUBLIC IS NOT NULL
         )
         WHERE R = 1
-        ORDER BY DESCR    
+        ORDER BY DESCR
     """
-    descriptions = []
-    proteins = set()
-    files = []
-    _text = None
-    for text, accession in con.get(query):
-        if text != _text:
-            if _text:
-                descriptions.append({
-                    "text": _text,
-                    "proteins": list(proteins)
-                })
+    with io.Store(dir=tmpdir) as store:
+        proteins = set()
+        _text = None
+        for text, accession in con.get(query):
+            if text != _text:
+                if _text:
+                    store.add({
+                        "text": _text,
+                        "proteins": proteins
+                    })
 
-                if len(descriptions) == chunk_size:
-                    files.append(_dump_descriptions(descriptions, tmpdir))
-                    descriptions = []
+                proteins = set()
+                _text = text
 
-            proteins = set()
-            _text = text
+            proteins.add(accession)
 
-        proteins.add(accession)
+        if proteins:
+            store.add({
+                "text": _text,
+                "proteins": proteins
+            })
 
-    if proteins:
-        descriptions.append({
-            "text": _text,
-            "proteins": list(proteins)
-        })
-        files.append(_dump_descriptions(descriptions, tmpdir))
-
-    desc_id = 1
-    for filepath in files:
-        with gzip.open(filepath, "rt") as fh:
-            descriptions = json.load(fh)
-
-        os.unlink(filepath)
-
+        logger.debug("descriptions        populating")
+        desc_id = 1
         cv_table = []
         rel_table = []
-        for d in descriptions:
-            cv_table.append((desc_id, d["text"]))
-            rel_table += [(accession, desc_id) for accession in d["proteins"]]
-            desc_id += 1
+        for description in store:
+            cv_table.append((desc_id, description["text"]))
+            for accession in description["proteins"]:
+                rel_table.append((accession, desc_id))
 
+            if len(rel_table) >= BULK_INSERT_SIZE:
+                con.executemany(
+                    """
+                    INSERT /*+ APPEND */ INTO {}.DESC_VALUE (DESC_ID, TEXT)
+                    VALUES (:1, :2)
+                    """.format(schema),
+                    cv_table
+                )
+                # Commit after each transaction to avoid ORA-12838
+                con.commit()
+
+                for i in range(0, len(rel_table), BULK_INSERT_SIZE):
+                    con.executemany(
+                        """
+                        INSERT /*+ APPEND */ INTO {}.PROTEIN_DESC (
+                            PROTEIN_AC, DESC_ID
+                        )
+                        VALUES (:1, :2)
+                        """.format(schema),
+                        rel_table[i:i+BULK_INSERT_SIZE]
+                    )
+                    con.commit()
+
+                cv_table = []
+                rel_table = []
+
+            desc_id += 1
+            if not desc_id % 1000000:
+                logger.debug("descriptions        "
+                             "populating: {:>9}".format(desc_id))
+
+        logger.debug("descriptions        temporary disk space: "
+                     "{:,} bytes".format(store.size))
+
+    if cv_table:
         con.executemany(
             """
             INSERT /*+ APPEND */ INTO {}.DESC_VALUE (DESC_ID, TEXT)
-            VALUES (:1, :2)            
+            VALUES (:1, :2)
             """.format(schema),
             cv_table
         )
-        # Commit after each transaction to avoid ORA-12838
         con.commit()
 
-        for i in range(0, len(rel_table), chunk_size):
-            con.executemany(
-                """
-                INSERT /*+ APPEND */ INTO {}.PROTEIN_DESC (PROTEIN_AC, DESC_ID)
-                VALUES (:1, :2)                
-                """.format(schema),
-                rel_table[i:i+chunk_size]
+    for i in range(0, len(rel_table), BULK_INSERT_SIZE):
+        con.executemany(
+            """
+            INSERT /*+ APPEND */ INTO {}.PROTEIN_DESC (
+                PROTEIN_AC, DESC_ID
             )
-            con.commit()
+            VALUES (:1, :2)
+            """.format(schema),
+            rel_table[i:i+BULK_INSERT_SIZE]
+        )
+        con.commit()
 
+    cv_table = []
+    rel_table = []
+
+    logger.debug("descriptions        adding constraints")
     con.execute(
         """
         ALTER TABLE {}.DESC_VALUE
@@ -243,18 +284,8 @@ def load_descriptions(dsn, schema, tmpdir=None, chunk_size=100000):
     )
 
     for table in tables:
-        con.optimize_table(schema, table, cascade=True)
+        con.optimise_table(schema, table, cascade=True)
         con.grant("SELECT", schema, table, "INTERPRO_SELECT")
-
-
-def _dump_descriptions(descriptions, tmpdir=None):
-    fd, filepath = mkstemp(suffix=".json.gz", dir=tmpdir)
-    os.close(fd)
-
-    with gzip.open(filepath, "wt") as fh:
-        json.dump(descriptions, fh)
-
-    return filepath
 
 
 def load_enzymes(dsn, schema):
@@ -266,7 +297,7 @@ def load_enzymes(dsn, schema):
         (
             PROTEIN_AC VARCHAR2(15) NOT NULL,
             ECNO VARCHAR2(15) NOT NULL
-        ) NOLOGGING        
+        ) NOLOGGING
         """.format(schema)
     )
 
@@ -275,8 +306,10 @@ def load_enzymes(dsn, schema):
         INSERT /*+APPEND*/ INTO {}.ENZYME (PROTEIN_AC, ECNO)
         SELECT DISTINCT E.ACCESSION, D.DESCR
         FROM SPTR.DBENTRY@SWPREAD E
-        LEFT OUTER JOIN SPTR.DBENTRY_2_DESC@SWPREAD D ON E.DBENTRY_ID = D.DBENTRY_ID
-        LEFT OUTER JOIN SPTR.CV_DESC@SWPREAD C ON D.DESC_ID = C.DESC_ID
+        LEFT OUTER JOIN SPTR.DBENTRY_2_DESC@SWPREAD D
+            ON E.DBENTRY_ID = D.DBENTRY_ID
+        LEFT OUTER JOIN SPTR.CV_DESC@SWPREAD C
+            ON D.DESC_ID = C.DESC_ID
         WHERE E.ENTRY_TYPE IN (0, 1)
         AND E.MERGE_STATUS != 'R'
         AND E.DELETED = 'N'
@@ -288,17 +321,17 @@ def load_enzymes(dsn, schema):
 
     con.execute(
         """
-        CREATE INDEX I_ENZYME$PROTEIN 
+        CREATE INDEX I_ENZYME$PROTEIN
         ON {}.ENZYME (PROTEIN_AC) NOLOGGING
         """.format(schema)
     )
 
     con.execute(
         """
-        CREATE INDEX I_ENZYME$EC 
+        CREATE INDEX I_ENZYME$EC
         ON {}.ENZYME (ECNO) NOLOGGING
         """.format(schema)
     )
 
-    con.optimize_table(schema, "ENZYME", cascade=True)
+    con.optimise_table(schema, "ENZYME", cascade=True)
     con.grant("SELECT", schema, "ENZYME", "INTERPRO_SELECT")
