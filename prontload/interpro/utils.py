@@ -759,6 +759,10 @@ def calculate_similarities(con, schema, coverages, overlaps):
     for acc_1 in overlaps:
         for acc_2 in overlaps[acc_1]:
             i = overlaps[acc_1][acc_2]
+            if not i:
+                # Not a single residue of overlap
+                continue
+
             u = coverages[acc_1] + coverages[acc_2] - i
             index = i / u
             cont_1 = i / coverages[acc_1]
