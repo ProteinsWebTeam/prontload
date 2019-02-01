@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from .oracledb import Connection
+from .oracledb import Connection, BULK_INSERT_SIZE
 
 
 def load_annotations(dsn, schema):
@@ -113,8 +113,41 @@ def load_publications(dsn, schema):
     con.grant("SELECT", schema, "PUBLICATION", "INTERPRO_SELECT")
 
 
+def traverse_ancestors(go_id: str, ancestors: dict, constraints: dict,
+                       dst: set):
+    dst |= constraints.get(go_id, set())
+
+    for parent_id in ancestors.get(go_id, []):
+        traverse_ancestors(parent_id, ancestors, constraints, dst)
+
+
 def load_terms(dsn, schema):
     con = Connection(dsn)
+    ancestors = {}
+    for child_id, parent_id in con.get(
+        """
+        SELECT CHILD_ID, PARENT_ID
+        FROM GO.ANCESTORS@GOAPRO 
+        WHERE CHILD_ID != PARENT_ID
+        """
+    ):
+        if child_id in ancestors:
+            ancestors[child_id].add(parent_id)
+        else:
+            ancestors[child_id] = {parent_id}
+
+    constraints = {}
+    for go_id, constraint_id in con.get(
+        """
+        SELECT DISTINCT GO_ID, CONSTRAINT_ID
+        FROM GO.TERM_TAXON_CONSTRAINTS@GOAPRO
+        """
+    ):
+        if go_id in constraints:
+            constraints[go_id].add(constraint_id)
+        else:
+            constraints[go_id] = {constraint_id}
+
     con.drop_table(schema, "TERM")
     con.execute(
         """
@@ -123,6 +156,7 @@ def load_terms(dsn, schema):
             GO_ID VARCHAR2(10) NOT NULL,
             NAME VARCHAR2(200) NOT NULL,
             CATEGORY CHAR(1) NOT NULL ,
+            NUM_CONSTRAINTS NUMBER NOT NULL,
             IS_OBSOLETE CHAR(1) NOT NULL ,
             DEFINITION VARCHAR2(4000),
             REPLACED_BY VARCHAR2(10)
@@ -130,21 +164,53 @@ def load_terms(dsn, schema):
         """.format(schema)
     )
 
-    con.execute(
+    rows = []
+    for row in con.get(
         """
-        INSERT /*+APPEND*/ INTO {}.TERM (GO_ID, NAME, CATEGORY, IS_OBSOLETE, DEFINITION, REPLACED_BY)
-        SELECT T.GO_ID GO_ID, T.NAME, T.CATEGORY, T.IS_OBSOLETE, D.DEFINITION, NULL
+        SELECT 
+          T.GO_ID, T.NAME, T.CATEGORY, 
+          T.IS_OBSOLETE, D.DEFINITION, NULL
         FROM GO.TERMS@GOAPRO T
-        INNER JOIN GO.DEFINITIONS@GOAPRO D ON T.GO_ID = D.GO_ID
+        INNER JOIN GO.DEFINITIONS@GOAPRO D 
+          ON T.GO_ID = D.GO_ID
         UNION ALL
-        SELECT S.SECONDARY_ID GO_ID, T.NAME, T.CATEGORY, T.IS_OBSOLETE, D.DEFINITION, T.GO_ID
+        SELECT 
+          S.SECONDARY_ID, T.NAME, T.CATEGORY, 
+          T.IS_OBSOLETE, D.DEFINITION, T.GO_ID
         FROM GO.SECONDARIES@GOAPRO S
-        INNER JOIN GO.TERMS@GOAPRO T ON S.GO_ID = T.GO_ID
-        INNER JOIN GO.DEFINITIONS@GOAPRO D ON T.GO_ID = D.GO_ID
-        ORDER BY T.GO_ID
-        """.format(schema)
-    )
-    con.commit()
+        INNER JOIN GO.TERMS@GOAPRO T 
+          ON S.GO_ID = T.GO_ID
+        INNER JOIN GO.DEFINITIONS@GOAPRO D 
+          ON T.GO_ID = D.GO_ID        
+        """
+    ):
+        term_constraints = set()
+        traverse_ancestors(row[0], ancestors, constraints, term_constraints)
+
+        rows.append((row[0], row[1], row[2], len(term_constraints),
+                     row[3], row[4], row[5]))
+
+        if len(rows) == BULK_INSERT_SIZE:
+            con.executemany(
+                """
+                INSERT /*+APPEND*/ INTO {}.TERM
+                VALUES (:1, :2, :3, :4, :5, :6, :7)
+                """.format(schema),
+                rows
+            )
+            con.commit()
+            rows = []
+
+    if rows:
+        con.executemany(
+            """
+            INSERT /*+APPEND*/ INTO {}.TERM
+            VALUES (:1, :2, :3, :4, :5, :6, :7)
+            """.format(schema),
+            rows
+        )
+        con.commit()
+        rows = []
 
     con.execute(
         """
