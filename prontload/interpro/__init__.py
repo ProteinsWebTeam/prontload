@@ -675,14 +675,15 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
     residue_coverages = residue_overlaps = None
 
     t1 = Thread(target=utils.optimise_method2protein, args=(dsn, schema))
+    t2 = Thread(target=utils.create_method2swissprot, args=(dsn, schema))
     p1 = Process(target=utils.load_description_counts,
                  args=(dsn, schema, names))
     p2 = Process(target=utils.load_taxonomy_counts, args=(dsn, schema, taxa))
 
-    for x in (t1, p1, p2):
+    for x in (t1, t2, p1, p2):
         x.start()
 
-    for x in (t1, p1, p2):
+    for x in (t1, t2, p1, p2):
         x.join()
 
     for o in names:

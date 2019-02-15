@@ -836,17 +836,36 @@ def optimise_method2protein(dsn, schema):
         NOLOGGING
         """.format(schema)
     )
-    con.execute(
-        """
-        CREATE INDEX I_METHOD2PROTEIN$M$DB
-        ON {}.METHOD2PROTEIN (METHOD_AC, DBCODE)
-        NOLOGGING
-        """.format(schema)
-    )
 
     con.optimise_table(schema, "METHOD2PROTEIN", cascade=True)
     con.grant("SELECT", schema, "METHOD2PROTEIN", "INTERPRO_SELECT")
     logger.debug("method2protein      METHOD2PROTEIN ready")
+
+
+def create_method2swissprot(dsn, schema):
+    logger.debug("method2protein      creating METHOD2SWISSPROT")
+    con = Connection(dsn)
+    con.drop_table(schema, "METHOD2SWISSPROT")
+    con.execute(
+        """
+        CREATE TABLE {0}.METHOD2SWISSPROT
+        AS
+        SELECT
+          METHOD_AC, PROTEIN_AC, MD5, LEN, LEFT_NUMBER, DESC_ID
+        FROM {0}.METHOD2PROTEIN
+        WHERE DBCODE = 'S'
+        """.format(schema)
+    )
+    con.execute(
+        """
+        ALTER TABLE {}.METHOD2SWISSPROT
+        ADD CONSTRAINT PK_METHOD2SWISSPROT
+        PRIMARY KEY (METHOD_AC, PROTEIN_AC)
+        """.format(schema)
+    )
+    con.optimise_table(schema, "METHOD2SWISSPROT", cascade=True)
+    con.grant("SELECT", schema, "METHOD2SWISSPROT", "INTERPRO_SELECT")
+    logger.debug("method2protein      METHOD2SWISSPROT ready")
 
 
 def enable_schema(con, schema):
