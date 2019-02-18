@@ -856,6 +856,12 @@ def create_method2swissprot(dsn, schema):
         WHERE DBCODE = 'S'
         """.format(schema)
     )
+    logger.debug("method2protein      METHOD2SWISSPROT created")
+
+
+def optimise_method2swissprot(dsn, schema):
+    logger.debug("method2protein      optimising METHOD2SWISSPROT")
+    con = Connection(dsn)
     con.execute(
         """
         ALTER TABLE {}.METHOD2SWISSPROT

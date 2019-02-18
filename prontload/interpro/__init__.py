@@ -674,8 +674,11 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
     utils.calculate_similarities(con, schema, residue_coverages, residue_overlaps)
     residue_coverages = residue_overlaps = None
 
+    # Create table (MV-like) for only SwissProt proteins
+    utils.create_method2swissprot(dsn, schema)
+
     t1 = Thread(target=utils.optimise_method2protein, args=(dsn, schema))
-    t2 = Thread(target=utils.create_method2swissprot, args=(dsn, schema))
+    t2 = Thread(target=utils.optimise_method2swissprot, args=(dsn, schema))
     p1 = Process(target=utils.load_description_counts,
                  args=(dsn, schema, names))
     p2 = Process(target=utils.load_taxonomy_counts, args=(dsn, schema, taxa))
