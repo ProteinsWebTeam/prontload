@@ -995,6 +995,8 @@ def load_taxonomy_counts(dsn: str, schema: str, organisers: list):
             lineages[left_num] = {rank: tax_id}
 
     signatures = {}
+    _ranks = ["superkingdom", "kingdom", "phylum", "class", "order",
+              "family", "genus", "species"]
     for acc, left_numbers in heapq.merge(*organisers, key=lambda x: x[0]):
         if acc in signatures:
             s = signatures[acc]
@@ -1004,7 +1006,8 @@ def load_taxonomy_counts(dsn: str, schema: str, organisers: list):
         for left_num in left_numbers:
             ranks = lineages.get(left_num, {"no rank": -1})
 
-            for rank, tax_id in ranks.items():
+            for rank in _ranks:
+                tax_id = ranks.get(rank, -1)
                 if rank in s:
                     r = s[rank]
                 else:
