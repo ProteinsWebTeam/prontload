@@ -522,7 +522,11 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
             LEN NUMBER(5) NOT NULL,
             LEFT_NUMBER NUMBER NOT NULL,
             DESC_ID NUMBER(10) NOT NULL
-        ) NOLOGGING
+        )
+        PARTITION BY LIST (DBCODE) (
+          PARTITION M2P_SWISSP VALUES ('S'),
+          PARTITION M2P_TREMBL VALUES ('T')
+        )
         """.format(schema)
     )
 
