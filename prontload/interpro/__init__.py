@@ -165,7 +165,7 @@ def load_databases(dsn, schema):
 
     con.execute(
         """
-        INSERT /*+APPEND*/ INTO {}.CV_DATABASE (
+        INSERT /*+ APPEND */ INTO {}.CV_DATABASE (
             DBCODE, DBNAME, DBSHORT, VERSION, FILE_DATE
         )
         SELECT DB.DBCODE, DB.DBNAME, DB.DBSHORT, V.VERSION, V.FILE_DATE
@@ -208,7 +208,7 @@ def load_matches(dsn, schema):
     logger.debug("matches             inserting protein/feature matches")
     con.execute(
         """
-        INSERT /*+APPEND*/ INTO {}.MATCH
+        INSERT /*+ APPEND */ INTO {}.MATCH
         SELECT
           PROTEIN_AC, METHOD_AC, DBCODE,
           CASE
@@ -296,7 +296,7 @@ def load_proteins(dsn, schema):
 
     con.execute(
         """
-        INSERT /*+APPEND*/ INTO {}.PROTEIN (
+        INSERT /*+ APPEND */ INTO {}.PROTEIN (
             PROTEIN_AC, NAME, DBCODE, LEN, FRAGMENT, TAX_ID
         )
         SELECT
@@ -351,7 +351,7 @@ def load_signatures(dsn, schema):
 
     con.execute(
         """
-        INSERT /*+APPEND*/ INTO {}.METHOD (
+        INSERT /*+ APPEND */ INTO {}.METHOD (
             METHOD_AC, NAME, DBCODE, CANDIDATE,
             DESCRIPTION, SIG_TYPE, ABSTRACT, ABSTRACT_LONG
         )
@@ -406,13 +406,13 @@ def load_taxa(dsn, schema):
             LEFT_NUMBER NUMBER NOT NULL,
             TAX_ID NUMBER(10) NOT NULL,
             RANK VARCHAR2(50)
-        ) NOLOGGING
+        )
         """.format(schema)
     )
 
     con.execute(
         """
-        INSERT /*+APPEND*/ INTO {}.ETAXI (
+        INSERT /*+ APPEND */ INTO {}.ETAXI (
             TAX_ID, PARENT_ID, SCIENTIFIC_NAME, RANK,
             LEFT_NUMBER, RIGHT_NUMBER, FULL_NAME
         )
@@ -478,7 +478,7 @@ def load_taxa(dsn, schema):
     for i in range(0, len(lineage), BULK_INSERT_SIZE):
         con.executemany(
             """
-            INSERT /*+APPEND*/ INTO {}.LINEAGE (LEFT_NUMBER, TAX_ID, RANK)
+            INSERT INTO {}.LINEAGE (LEFT_NUMBER, TAX_ID, RANK)
             VALUES (:1, :2, :3)
             """.format(schema),
             lineage[i:i+BULK_INSERT_SIZE]

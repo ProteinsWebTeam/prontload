@@ -160,7 +160,7 @@ def load_terms(dsn, schema):
             IS_OBSOLETE CHAR(1) NOT NULL ,
             DEFINITION VARCHAR2(4000),
             REPLACED_BY VARCHAR2(10)
-        ) NOLOGGING
+        )
         """.format(schema)
     )
 
@@ -193,7 +193,7 @@ def load_terms(dsn, schema):
         if len(rows) == BULK_INSERT_SIZE:
             con.executemany(
                 """
-                INSERT /*+APPEND*/ INTO {}.TERM
+                INSERT INTO {}.TERM
                 VALUES (:1, :2, :3, :4, :5, :6, :7)
                 """.format(schema),
                 rows
@@ -204,7 +204,7 @@ def load_terms(dsn, schema):
     if rows:
         con.executemany(
             """
-            INSERT /*+APPEND*/ INTO {}.TERM
+            INSERT INTO {}.TERM
             VALUES (:1, :2, :3, :4, :5, :6, :7)
             """.format(schema),
             rows
