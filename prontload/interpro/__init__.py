@@ -406,7 +406,7 @@ def load_taxa(dsn, schema):
             LEFT_NUMBER NUMBER NOT NULL,
             TAX_ID NUMBER(10) NOT NULL,
             RANK VARCHAR2(50)
-        )
+        ) NOLOGGING
         """.format(schema)
     )
 
@@ -478,7 +478,7 @@ def load_taxa(dsn, schema):
     for i in range(0, len(lineage), BULK_INSERT_SIZE):
         con.executemany(
             """
-            INSERT INTO {}.LINEAGE (LEFT_NUMBER, TAX_ID, RANK)
+            INSERT /*+ APPEND */ INTO {}.LINEAGE (LEFT_NUMBER, TAX_ID, RANK)
             VALUES (:1, :2, :3)
             """.format(schema),
             lineage[i:i+BULK_INSERT_SIZE]
@@ -526,7 +526,7 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
         PARTITION BY LIST (DBCODE) (
           PARTITION M2P_SWISSP VALUES ('S'),
           PARTITION M2P_TREMBL VALUES ('T')
-        )
+        ) NOLOGGING
         """.format(schema)
     )
 

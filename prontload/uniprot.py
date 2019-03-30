@@ -21,7 +21,7 @@ def load_comments(dsn, schema):
         (
             TOPIC_ID NUMBER(2) NOT NULL,
             TOPIC VARCHAR2(30) NOT NULL
-        )
+        ) NOLOGGING
         """.format(schema)
     )
 
@@ -33,7 +33,7 @@ def load_comments(dsn, schema):
             COMMENT_ID NUMBER(6) NOT NULL,
             TEXT VARCHAR2(4000) NOT NULL,
             CONSTRAINT PK_COMMENT_VALUE PRIMARY KEY (TOPIC_ID, COMMENT_ID)
-        )
+        ) NOLOGGING
         """.format(schema)
     )
 
@@ -47,7 +47,7 @@ def load_comments(dsn, schema):
             CONSTRAINT PK_PROTEIN_COMMENT PRIMARY KEY (
                 PROTEIN_AC, TOPIC_ID, COMMENT_ID
             )
-        )
+        ) NOLOGGING
         """.format(schema)
     )
 
@@ -101,14 +101,14 @@ def load_comments(dsn, schema):
     ]
 
     query = """
-        INSERT INTO {}.CV_COMMENT_TOPIC (TOPIC_ID, TOPIC)
+        INSERT /*+ APPEND */ INTO {}.CV_COMMENT_TOPIC
         VALUES (:1, :2)
     """.format(schema)
     con.executemany(query, topics)
     con.commit()
 
     query = """
-        INSERT INTO {}.COMMENT_VALUE (TOPIC_ID, COMMENT_ID, TEXT)
+        INSERT /*+ APPEND */ INTO {}.COMMENT_VALUE
         VALUES (:1, :2, :3)
     """.format(schema)
     for i in range(0, len(comments), BULK_INSERT_SIZE):
@@ -116,9 +116,7 @@ def load_comments(dsn, schema):
         con.commit()
 
     query = """
-        INSERT INTO {}.PROTEIN_COMMENT (
-            PROTEIN_AC, TOPIC_ID, COMMENT_ID
-        )
+        INSERT /*+ APPEND */ INTO {}.PROTEIN_COMMENT
         VALUES (:1, :2, :3)
     """.format(schema)
     for i in range(0, len(protein2comment), BULK_INSERT_SIZE):
@@ -142,7 +140,7 @@ def load_descriptions(dsn, schema, tmpdir=None):
         (
             DESC_ID NUMBER(10) NOT NULL,
             TEXT VARCHAR2(4000) NOT NULL
-        )
+        ) NOLOGGING
         """.format(schema)
     )
 
@@ -152,7 +150,7 @@ def load_descriptions(dsn, schema, tmpdir=None):
         (
             PROTEIN_AC VARCHAR2(15) NOT NULL,
             DESC_ID NUMBER(10) NOT NULL
-        )
+        ) NOLOGGING
         """.format(schema)
     )
 
@@ -212,7 +210,7 @@ def load_descriptions(dsn, schema, tmpdir=None):
             if len(rel_table) >= BULK_INSERT_SIZE:
                 con.executemany(
                     """
-                    INSERT INTO {}.DESC_VALUE (DESC_ID, TEXT)
+                    INSERT /*+ APPEND */ INTO {}.DESC_VALUE
                     VALUES (:1, :2)
                     """.format(schema),
                     cv_table
@@ -223,9 +221,7 @@ def load_descriptions(dsn, schema, tmpdir=None):
                 for i in range(0, len(rel_table), BULK_INSERT_SIZE):
                     con.executemany(
                         """
-                        INSERT INTO {}.PROTEIN_DESC (
-                            PROTEIN_AC, DESC_ID
-                        )
+                        INSERT /*+ APPEND */ INTO {}.PROTEIN_DESC
                         VALUES (:1, :2)
                         """.format(schema),
                         rel_table[i:i+BULK_INSERT_SIZE]
@@ -246,7 +242,7 @@ def load_descriptions(dsn, schema, tmpdir=None):
     if cv_table:
         con.executemany(
             """
-            INSERT INTO {}.DESC_VALUE (DESC_ID, TEXT)
+            INSERT /*+ APPEND */ INTO {}.DESC_VALUE
             VALUES (:1, :2)
             """.format(schema),
             cv_table
@@ -256,7 +252,7 @@ def load_descriptions(dsn, schema, tmpdir=None):
     for i in range(0, len(rel_table), BULK_INSERT_SIZE):
         con.executemany(
             """
-            INSERT INTO {}.PROTEIN_DESC (PROTEIN_AC, DESC_ID)
+            INSERT /*+ APPEND */ INTO {}.PROTEIN_DESC
             VALUES (:1, :2)
             """.format(schema),
             rel_table[i:i+BULK_INSERT_SIZE]
