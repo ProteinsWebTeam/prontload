@@ -6,13 +6,17 @@ __version__ = "0.5.3"
 import logging
 
 
-def get_logger(name: str="prontload") -> logging.Logger:
+def get_logger(name: str="prontload",
+               level: int=logging.INFO) -> logging.Logger:
+
     logger = logging.getLogger(name)
     if not logger.handlers:
         ch = logging.StreamHandler()
         ch.setFormatter(logging.Formatter(fmt="%(asctime)s: %(message)s",
                                           datefmt="%Y-%m-%d %H:%M:%S"))
         logger.addHandler(ch)
+        logger.setLevel(level)
+
     return logger
 
 
@@ -66,7 +70,7 @@ def cli():
     args = parser.parse_args()
 
     os.makedirs(args.tmpdir, exist_ok=True)
-    get_logger().setLevel(args.verbose)
+    get_logger(level=args.verbose)
 
     with open(args.config, "rt") as fh:
         config = json.load(fh)
