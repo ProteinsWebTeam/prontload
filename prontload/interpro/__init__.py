@@ -59,7 +59,7 @@ def report_description_changes(dsn, schema, output):
         FROM INTERPRO.METHOD2SWISS_DE M
         INNER JOIN INTERPRO.ENTRY2METHOD EM
         ON M.METHOD_AC = EM.METHOD_AC
-    """.format(schema)
+    """
     old_entries = {}
     for acc, text in con.get(query):
         if acc in old_entries:
