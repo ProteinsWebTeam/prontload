@@ -19,10 +19,11 @@ def clear_schema(dsn, schema):
 def copy_schema(dsn, schema):
     con = Connection(dsn)
 
+    enable_schema(con, schema)
+
     logger.debug("copy                exporting")
     proc = "{}.copy_interpro_analysis.exp_interpro_analysis".format(schema)
     con.exec(proc)
-    enable_schema(con, schema)
 
     logger.debug("copy                importing")
     con.exec("interpro_analysis.drop_all")
