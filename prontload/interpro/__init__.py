@@ -56,8 +56,8 @@ def report_description_changes(dsn, schema, output):
     """
     query = """
         SELECT DISTINCT EM.ENTRY_AC, M.DESCRIPTION
-        FROM {0}.METHOD2SWISS_DE M
-        INNER JOIN {0}.ENTRY2METHOD EM
+        FROM INTERPRO.METHOD2SWISS_DE M
+        INNER JOIN INTERPRO.ENTRY2METHOD EM
         ON M.METHOD_AC = EM.METHOD_AC
     """.format(schema)
     old_entries = {}
