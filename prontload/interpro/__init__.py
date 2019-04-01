@@ -29,18 +29,17 @@ def copy_schema(dsn, schema):
     con.exec("interpro_analysis.drop_all")
     to_drop = []
     for row in con.get(
-            """
-            SELECT OWNER_NAME, JOB_NAME
-            FROM DBA_DATAPUMP_JOBS
-            WHERE STATE = 'NOT RUNNING'
-            AND ATTACHED_SESSIONS = 0
-            """
+        """
+        SELECT JOB_NAME
+        FROM USER_DATAPUMP_JOBS
+        WHERE STATE = 'NOT RUNNING'
+        AND ATTACHED_SESSIONS = 0
+        """
     ):
-        to_drop.append(row)
+        to_drop.append(row[0])
 
-    for owner, table in to_drop:
-        if owner == schema:
-            con.drop_table(schema, table)
+    for table in to_drop:
+        con.drop_table(schema, table)
 
     proc = "{}.copy_interpro_analysis.imp_interpro_analysis_load".format(schema)
     con.exec(proc)
