@@ -3,17 +3,11 @@ from multiprocessing import Process, Queue
 from threading import Thread
 
 from .. import get_logger
-from ..oracledb import Connection, BULK_INSERT_SIZE
+from ..oracledb import BULK_INSERT_SIZE, Connection
 
 from .utils import enable_schema, get_entry_key
 
 logger = get_logger()
-
-
-def clear_schema(dsn, schema):
-    con = Connection(dsn)
-    for table in con.get_tables(schema):
-        con.drop_table(schema, table)
 
 
 def copy_schema(dsn, schema):

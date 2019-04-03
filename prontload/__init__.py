@@ -38,7 +38,7 @@ def cli():
     from tempfile import gettempdir
     from threading import Thread
 
-    from . import goa, interpro, uniprot
+    from . import goa, interpro, oracledb, uniprot
 
     default_report = "swissprot_report_{}.tsv".format(
         datetime.today().strftime("%Y_%m_%d")
@@ -82,7 +82,7 @@ def cli():
     steps = {
         # In priority, if called
         "clear": {
-            "func": interpro.clear_schema,
+            "func": oracledb.clear_schema,
             "args": (dsn, schema),
             "skip": True
         },

@@ -1,7 +1,10 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
+from concurrent.futures import as_completed, ThreadPoolExecutor
 
 import cx_Oracle
+
+from . import get_logger
+
+logger = get_logger()
 
 
 BULK_INSERT_SIZE = 100000
@@ -70,6 +73,84 @@ class Connection(object):
         """
         return [row[0] for row in self.get(query, ownname)]
 
+    def get_indexes(self, ownname):
+        query = """
+            SELECT 
+              I.INDEX_NAME, I.TABLESPACE_NAME, I.UNIQUENESS, I.TABLE_NAME, 
+              I.LOGGING, IC.COLUMN_NAME, IC.DESCEND
+            FROM ALL_INDEXES I
+            INNER JOIN ALL_IND_COLUMNS IC 
+              ON I.OWNER = IC.INDEX_OWNER 
+              AND I.INDEX_NAME = IC.INDEX_NAME 
+              AND I.TABLE_NAME = IC.TABLE_NAME
+            WHERE UPPER(I.OWNER) = UPPER(:1)
+            ORDER BY I.INDEX_NAME, IC.COLUMN_POSITION
+        
+        """
+        indexes = {}
+        for row in self.get(query, ownname):
+            name = row[0]
+            if name in indexes:
+                idx = indexes[name]
+            else:
+                idx = indexes[name] = {
+                    "name": name,
+                    "tablespace": row[1],
+                    "is_unique": row[2] == "UNIQUE",
+                    "table": row[3],
+                    "logging": row[4],
+                    "columns": []
+                }
+
+            idx["columns"].append({
+                "name": row[5],
+                "order":  row[6]
+            })
+
+        return list(indexes.values())
+
+    def get_constraints(self, ownname):
+        query = """
+            SELECT 
+              C.CONSTRAINT_NAME, C.CONSTRAINT_TYPE, C.TABLE_NAME,
+              C.R_CONSTRAINT_NAME, CC.COLUMN_NAME
+            FROM ALL_CONSTRAINTS C
+            INNER JOIN ALL_CONS_COLUMNS CC 
+              ON C.OWNER = CC.OWNER 
+              AND C.CONSTRAINT_NAME = CC.CONSTRAINT_NAME 
+              AND C.TABLE_NAME = CC.TABLE_NAME
+            WHERE UPPER(C.OWNER) = UPPER(:1)
+            ORDER BY C.CONSTRAINT_NAME, CC.POSITION
+        """
+
+        constraints = {}
+        for row in self.get(query, ownname):
+            name = row[0]
+            _type = row[1]
+
+            if _type == 'P':
+                _type = "PRIMARY KEY"
+            elif _type == 'U':
+                _type = "UNIQUE"
+            else:
+                # Only support primary/unique keys
+                continue
+
+            if name in constraints:
+                const = constraints[name]
+            else:
+                const = constraints[name] = {
+                    "name": name,
+                    "table": row[2],
+                    "type": _type,
+                    "reference": row[3],
+                    "columns": []
+                }
+
+            const["columns"].append(row[4])
+
+        return list(constraints.values())
+
     def drop_table(self, ownname, tabname, forgive_busy=False):
         try:
             self.execute("DROP TABLE {}.{} "
@@ -133,3 +214,99 @@ class Connection(object):
 
     def __del__(self):
         self.close()
+
+
+def clear_schema(dsn, schema):
+    con = Connection(dsn)
+    for table in con.get_tables(schema):
+        con.drop_table(schema, table)
+
+
+def copy_tables(dsn, schema_src, schema_dst):
+    clear_schema(dsn, schema_dst)
+
+    con = Connection(dsn)
+    jobs = {}
+    for table in con.get_tables(schema_src):
+        jobs[table] = {
+            "indexes": [],
+            "constraints": []
+        }
+
+    for idx in con.get_indexes(schema_src):
+        table = idx["table"]
+        if table in jobs:
+            jobs[table]["indexes"].append(idx)
+
+    for const in con.get_constraints(schema_src):
+        table = const["table"]
+        if table in jobs:
+            jobs[table]["constraints"].append(const)
+
+    num_errors = 0
+    with ThreadPoolExecutor() as executor:
+        fs = {}
+
+        for table, t in jobs.items():
+            f = executor.submit(rebuild_table, dsn, table, schema_src,
+                                schema_dst, t["constraints"], t["indexes"])
+            fs[f] = table
+
+        for f in as_completed(fs):
+            table = fs[f]
+
+            try:
+                f.result()
+            except Exception as exc:
+                logger.error("{} failed: {}".format(table, exc))
+                num_errors += 1
+            else:
+                logger.info("{} done".format(table))
+
+    return num_errors > 0
+
+
+def rebuild_table(dsn, name, src, dst, constraints, indexes):
+    con = Connection(dsn)
+    logger.debug("{}: creating table".format(name))
+    con.drop_table(dst, name)
+    con.execute(
+        """
+        CREATE TABLE {2}.{0} 
+        NOLOGGING 
+        AS 
+        SELECT * FROM {1}.{0}
+        """.format(name, src, dst)
+    )
+
+    for const in constraints:
+        logger.debug("{}: adding constraint {}".format(name, const["name"]))
+        con.execute(
+            """
+            ALTER TABLE {0}.{1}
+            ADD CONSTRAINT {2} {3} ({4})
+            """.format(dst, name, const["name"], const["type"], ", ".join(const["columns"]))
+        )
+
+    for idx in indexes:
+        columns = ["{name} {order}".format(**col) for col in idx["columns"]]
+
+        try:
+            logger.debug("{}: creating index {}".format(name, idx["name"]))
+            con.execute(
+                """
+                  CREATE INDEX {0}.{1}
+                  ON {0}.{2}({3}) NOLOGGING
+                """.format(dst, idx["name"], name, ", ".join(columns))
+            )
+        except cx_Oracle.DatabaseError as exc:
+            _error = exc.args[0]
+            if _error.code == 955:
+                """
+                ORA-00955: name is already used by an existing object
+                -> index was created when adding constraint
+                """
+                logger.warning("{}: skipping index {}".format(name,
+                                                              idx["name"]))
+            else:
+                raise exc
