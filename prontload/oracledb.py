@@ -63,16 +63,12 @@ class Connection(object):
 
     def get_tables(self, ownname):
         query = """
-            SELECT
-              table_name
-            FROM
-              dba_tables
-            WHERE
-              UPPER(owner) = :1
-            ORDER BY
-              table_name
+            SELECT TABLE_NAME 
+            FROM ALL_TABLES
+            WHERE UPPER(OWNER) = UPPER(:1)
+            ORDER BY TABLE_NAME
         """
-        return map(lambda r: r[0], self.get(query, ownname))
+        return [row[0] for row in self.get(query, ownname)]
 
     def drop_table(self, ownname, tabname, forgive_busy=False):
         try:
