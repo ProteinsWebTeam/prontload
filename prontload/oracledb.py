@@ -151,6 +151,27 @@ class Connection(object):
 
         return list(constraints.values())
 
+    def get_grants(self, owname):
+        query = """
+            SELECT TABLE_NAME, PRIVILEGE, GRANTEE 
+            FROM ALL_TAB_PRIVS 
+            WHERE TABLE_SCHEMA = :1
+        """
+
+        tables = {}
+        for table, privilege, grantee in self.get(query, owname):
+            if table in tables:
+                t = tables[table]
+            else:
+                t = tables[table] = []
+
+            t.append({
+                "privilege": privilege,
+                "grantee": grantee
+            })
+
+        return tables
+
     def drop_table(self, ownname, tabname, forgive_busy=False):
         try:
             self.execute("DROP TABLE {}.{} "
@@ -230,8 +251,13 @@ def copy_tables(dsn, schema_src, schema_dst):
     for table in con.get_tables(schema_src):
         jobs[table] = {
             "indexes": [],
-            "constraints": []
+            "constraints": [],
+            "grants": []
         }
+
+    for table, grants in con.get_grants(schema_src).items():
+        if table in jobs:
+            jobs[table]["grants"] = grants
 
     for idx in con.get_indexes(schema_src):
         table = idx["table"]
@@ -249,7 +275,8 @@ def copy_tables(dsn, schema_src, schema_dst):
 
         for table, t in jobs.items():
             f = executor.submit(rebuild_table, dsn, table, schema_src,
-                                schema_dst, t["constraints"], t["indexes"])
+                                schema_dst, t["constraints"], t["indexes"],
+                                t["grants"])
             fs[f] = table
 
         for f in as_completed(fs):
@@ -266,7 +293,7 @@ def copy_tables(dsn, schema_src, schema_dst):
     return num_errors > 0
 
 
-def rebuild_table(dsn, name, src, dst, constraints, indexes):
+def rebuild_table(dsn, name, src, dst, constraints, indexes, grants):
     con = Connection(dsn)
     logger.debug("{}: creating table".format(name))
     con.drop_table(dst, name)
@@ -278,6 +305,9 @@ def rebuild_table(dsn, name, src, dst, constraints, indexes):
         SELECT * FROM {1}.{0}
         """.format(name, src, dst)
     )
+
+    for grant in grants:
+        con.grant(grant["privilege"], dst, name, grant["grantee"])
 
     for const in constraints:
         logger.debug("{}: adding constraint {}".format(name, const["name"]))
