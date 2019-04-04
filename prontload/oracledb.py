@@ -336,7 +336,6 @@ def rebuild_table(dsn, name, src, dst, constraints, indexes, grants):
                 ORA-00955: name is already used by an existing object
                 -> index was created when adding constraint
                 """
-                logger.warning("{}: skipping index {}".format(name,
-                                                              idx["name"]))
+                logger.debug("{}: skipping index {}".format(name, idx["name"]))
             else:
                 raise exc
