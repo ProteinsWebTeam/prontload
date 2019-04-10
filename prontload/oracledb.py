@@ -172,6 +172,46 @@ class Connection(object):
 
         return tables
 
+    def get_partitions(self, owname):
+        query = """
+            SELECT 
+              PKC.NAME, PKC.COLUMN_NAME, PKC.COLUMN_POSITION, TP.PARTITION_NAME, 
+              TP.HIGH_VALUE
+            FROM ALL_TAB_PARTITIONS TP
+              INNER JOIN ALL_PART_KEY_COLUMNS PKC 
+              ON TP.TABLE_OWNER = PKC.OWNER AND TP.TABLE_NAME = PKC.NAME
+            WHERE TP.TABLE_OWNER = :1
+            ORDER BY TP.PARTITION_POSITION
+        """
+
+        tables = {}
+        for row in self.get(query, owname):
+            tab_name, col_name, col_pos, part_name, part_val = row
+
+            if tab_name in tables:
+                t = tables[tab_name]
+            else:
+                t = tables[tab_name] = {}
+
+            if col_name in t:
+                c = t[col_name]
+            else:
+                c = t[col_name] = {
+                    "column": col_name,
+                    "position": col_pos,
+                    "partitions": []
+                }
+
+            c["partitions"].append({
+                "name": part_name,
+                "value": part_val
+            })
+
+        for tab_name, t in tables.items():
+            tables[tab_name] = sorted(t.values(), key=lambda x: x["position"])
+
+        return tables
+
     def drop_table(self, ownname, tabname, forgive_busy=False):
         try:
             self.execute("DROP TABLE {}.{} "
@@ -252,7 +292,8 @@ def copy_tables(dsn, schema_src, schema_dst):
         jobs[table] = {
             "indexes": [],
             "constraints": [],
-            "grants": []
+            "grants": [],
+            "partition": None
         }
 
     for table, grants in con.get_grants(schema_src).items():
@@ -269,6 +310,14 @@ def copy_tables(dsn, schema_src, schema_dst):
         if table in jobs:
             jobs[table]["constraints"].append(const)
 
+    for table, columns in con.get_partitions(schema_src).items():
+        if table not in jobs:
+            continue
+        elif len(columns) > 1:
+            raise ValueError("Multi-column partitioning keys not supported")
+        else:
+            jobs[table]["partition"] = columns[0]
+
     num_errors = 0
     with ThreadPoolExecutor() as executor:
         fs = {}
@@ -276,7 +325,7 @@ def copy_tables(dsn, schema_src, schema_dst):
         for table, t in jobs.items():
             f = executor.submit(rebuild_table, dsn, table, schema_src,
                                 schema_dst, t["constraints"], t["indexes"],
-                                t["grants"])
+                                t["grants"], t["partition"])
             fs[f] = table
 
         for f in as_completed(fs):
@@ -293,18 +342,23 @@ def copy_tables(dsn, schema_src, schema_dst):
     return num_errors > 0
 
 
-def rebuild_table(dsn, name, src, dst, constraints, indexes, grants):
+def rebuild_table(dsn, name, src, dst, constraints, indexes, grants, partition):
     con = Connection(dsn)
     logger.debug("{}: creating table".format(name))
     con.drop_table(dst, name)
-    con.execute(
-        """
-        CREATE TABLE {2}.{0} 
-        NOLOGGING 
-        AS 
-        SELECT * FROM {1}.{0}
-        """.format(name, src, dst)
-    )
+
+    query = "CREATE TABLE {}.{}".format(dst, name)
+    if partition:
+        query += " PARTITION BY LIST ({}) ({})".format(
+            partition["column"],
+            ','.join([
+                "PARTITION {name} VALUES ({value})".format(**p)
+                for p in partition["partitions"]
+            ])
+        )
+
+    query += " NOLOGGIN AS SELECT * FROM {}.{}".format(src, name)
+    con.execute(query)
 
     for grant in grants:
         con.grant(grant["privilege"], dst, name, grant["grantee"])
