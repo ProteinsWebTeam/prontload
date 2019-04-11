@@ -363,6 +363,8 @@ def rebuild_table(dsn, name, src, dst, constraints, indexes, grants, partition):
     for grant in grants:
         con.grant(grant["privilege"], dst, name, grant["grantee"])
 
+    con.optimise_table(dst, name, cascade=True)
+
     for const in constraints:
         logger.debug("{}: adding constraint {}".format(name, const["name"]))
         con.execute(
