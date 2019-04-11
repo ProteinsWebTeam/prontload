@@ -357,7 +357,7 @@ def rebuild_table(dsn, name, src, dst, constraints, indexes, grants, partition):
             ])
         )
 
-    query += " NOLOGGIN AS SELECT * FROM {}.{}".format(src, name)
+    query += " NOLOGGING AS SELECT * FROM {}.{}".format(src, name)
     con.execute(query)
 
     for grant in grants:
