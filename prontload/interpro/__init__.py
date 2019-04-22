@@ -3,7 +3,7 @@ from multiprocessing import Process, Queue
 from threading import Thread
 
 from .. import get_logger
-from ..oracledb import BULK_INSERT_SIZE, Connection
+from ..oracledb import BULK_INSERT_SIZE, Connection, copy_tables
 
 from .utils import enable_schema, get_entry_key
 
@@ -12,9 +12,17 @@ logger = get_logger()
 
 def copy_schema(dsn, schema):
     con = Connection(dsn)
-
     enable_schema(con, schema)
+    con.close()
 
+    if copy_tables(dsn, schema, "INTERPRO_ANALYSIS"):
+        con = Connection(dsn)
+        enable_schema(con, "INTERPRO_ANALYSIS")
+        con.close()
+    else:
+        raise RuntimeError("schema copy failed")
+
+    return
     logger.debug("copy                exporting")
     proc = "{}.copy_interpro_analysis.exp_interpro_analysis".format(schema)
     con.exec(proc)
