@@ -136,10 +136,7 @@ class ProteinConsumer(Process):
             while len(data) >= BULK_INSERT_SIZE:
                 con.executemany(
                     """
-                    INSERT /*+APPEND*/ INTO {}.METHOD2PROTEIN (
-                        METHOD_AC, PROTEIN_AC, DBCODE,
-                        MD5, LEN, LEFT_NUMBER, DESC_ID
-                    )
+                    INSERT /*+ APPEND */ INTO {}.METHOD2PROTEIN
                     VALUES (:1, :2, :3, :4, :5, :6, :7)
                     """.format(self.schema),
                     data[:BULK_INSERT_SIZE]
@@ -150,10 +147,7 @@ class ProteinConsumer(Process):
         for i in range(0, len(data), BULK_INSERT_SIZE):
             con.executemany(
                 """
-                INSERT /*+APPEND*/ INTO {}.METHOD2PROTEIN (
-                    METHOD_AC, PROTEIN_AC, DBCODE,
-                    MD5, LEN, LEFT_NUMBER, DESC_ID
-                )
+                INSERT /*+ APPEND */ INTO {}.METHOD2PROTEIN
                 VALUES (:1, :2, :3, :4, :5, :6, :7)
                 """.format(self.schema),
                 data[i:i+BULK_INSERT_SIZE]
@@ -605,8 +599,7 @@ def make_predictions(con, schema, signatures, comparisons):
     for i in range(0, len(predictions), BULK_INSERT_SIZE):
         con.executemany(
             """
-            INSERT /*+APPEND*/
-            INTO {}.METHOD_PREDICTION (METHOD_AC1, METHOD_AC2, RELATION)
+            INSERT /*+ APPEND */ INTO {}.METHOD_PREDICTION
             VALUES (:1, :2, :3)
             """.format(schema),
             predictions[i:i + BULK_INSERT_SIZE]
@@ -644,9 +637,7 @@ def make_predictions(con, schema, signatures, comparisons):
     for i in range(0, len(signatures), BULK_INSERT_SIZE):
         con.executemany(
             """
-            INSERT /*+APPEND*/ INTO {}.METHOD_MATCH (
-                METHOD_AC, N_MATCHES, N_PROT
-            )
+            INSERT /*+ APPEND */ INTO {}.METHOD_MATCH
             VALUES (:1, :2, :3)
             """.format(schema),
             signatures[i:i + BULK_INSERT_SIZE]
@@ -716,10 +707,7 @@ def make_predictions(con, schema, signatures, comparisons):
     for i in range(0, len(overlaps), BULK_INSERT_SIZE):
         con.executemany(
             """
-            INSERT /*+APPEND*/ INTO {}.METHOD_OVERLAP (
-                METHOD_AC1, METHOD_AC2, N_PROT, N_OVER,
-                N_PROT_OVER, AVG_OVER, AVG_FRAC1, AVG_FRAC2
-            )
+            INSERT /*+ APPEND */ INTO {}.METHOD_OVERLAP
             VALUES (:1, :2, :3, :4, :5, :6, :7, :8)
             """.format(schema),
             overlaps[i:i + BULK_INSERT_SIZE]
@@ -772,8 +760,7 @@ def calculate_similarities(con, schema, coverages, overlaps):
             if len(data) == BULK_INSERT_SIZE:
                 con.executemany(
                     """
-                    INSERT /*+APPEND*/
-                    INTO {}.METHOD_SIMILARITY
+                    INSERT /*+ APPEND */ INTO {}.METHOD_SIMILARITY
                     VALUES (:1, :2, :3, :4, :5)
                     """.format(schema),
                     data
@@ -784,8 +771,7 @@ def calculate_similarities(con, schema, coverages, overlaps):
     if data:
         con.executemany(
             """
-            INSERT /*+APPEND*/
-            INTO {}.METHOD_SIMILARITY
+            INSERT /*+ APPEND */ INTO {}.METHOD_SIMILARITY
             VALUES (:1, :2, :3, :4, :5)
             """.format(schema),
             data
@@ -929,7 +915,7 @@ def load_description_counts(dsn: str, schema: str, organisers: list):
             if len(data) == BULK_INSERT_SIZE:
                 con.executemany(
                     """
-                    INSERT /*+APPEND*/ INTO {}.METHOD_DESC
+                    INSERT /*+ APPEND */ INTO {}.METHOD_DESC
                     VALUES (:1, :2, :3, :4)
                     """.format(schema),
                     data
@@ -940,7 +926,7 @@ def load_description_counts(dsn: str, schema: str, organisers: list):
     if data:
         con.executemany(
             """
-            INSERT /*+APPEND*/ INTO {}.METHOD_DESC
+            INSERT /*+ APPEND */ INTO {}.METHOD_DESC
             VALUES (:1, :2, :3, :4)
             """.format(schema),
             data
@@ -1028,7 +1014,7 @@ def load_taxonomy_counts(dsn: str, schema: str, organisers: list):
                 if len(data) == BULK_INSERT_SIZE:
                     con.executemany(
                         """
-                        INSERT /*+APPEND*/ INTO {}.METHOD_TAXA
+                        INSERT /*+ APPEND */ INTO {}.METHOD_TAXA
                         VALUES (:1, :2, :3, :4)
                         """.format(schema),
                         data
@@ -1039,7 +1025,7 @@ def load_taxonomy_counts(dsn: str, schema: str, organisers: list):
     if data:
         con.executemany(
             """
-            INSERT /*+APPEND*/ INTO {}.METHOD_TAXA
+            INSERT /*+ APPEND */ INTO {}.METHOD_TAXA
             VALUES (:1, :2, :3, :4)
             """.format(schema),
             data

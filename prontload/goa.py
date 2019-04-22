@@ -31,7 +31,7 @@ def load_annotations(dsn, schema):
     """
     con.execute(
         """
-        INSERT /*+APPEND*/ INTO {}.PROTEIN2GO (PROTEIN_AC, GO_ID, EVIDENCE, REF_DB_CODE, REF_DB_ID)
+        INSERT /*+ APPEND */ INTO {}.PROTEIN2GO (PROTEIN_AC, GO_ID, EVIDENCE, REF_DB_CODE, REF_DB_ID)
         SELECT A.ENTITY_ID, A.GO_ID, E.GO_EVIDENCE, A.REF_DB_CODE, A.REF_DB_ID
         FROM GO.ANNOTATIONS@GOAPRO A
         INNER JOIN GO.ECO2EVIDENCE@GOAPRO E ON A.ECO_ID = E.ECO_ID
@@ -127,7 +127,7 @@ def load_terms(dsn, schema):
     for child_id, parent_id in con.get(
         """
         SELECT CHILD_ID, PARENT_ID
-        FROM GO.ANCESTORS@GOAPRO 
+        FROM GO.ANCESTORS@GOAPRO
         WHERE CHILD_ID != PARENT_ID
         """
     ):
@@ -167,21 +167,21 @@ def load_terms(dsn, schema):
     rows = []
     for row in con.get(
         """
-        SELECT 
-          T.GO_ID, T.NAME, T.CATEGORY, 
+        SELECT
+          T.GO_ID, T.NAME, T.CATEGORY,
           T.IS_OBSOLETE, D.DEFINITION, NULL
         FROM GO.TERMS@GOAPRO T
-        INNER JOIN GO.DEFINITIONS@GOAPRO D 
+        INNER JOIN GO.DEFINITIONS@GOAPRO D
           ON T.GO_ID = D.GO_ID
         UNION ALL
-        SELECT 
-          S.SECONDARY_ID, T.NAME, T.CATEGORY, 
+        SELECT
+          S.SECONDARY_ID, T.NAME, T.CATEGORY,
           T.IS_OBSOLETE, D.DEFINITION, T.GO_ID
         FROM GO.SECONDARIES@GOAPRO S
-        INNER JOIN GO.TERMS@GOAPRO T 
+        INNER JOIN GO.TERMS@GOAPRO T
           ON S.GO_ID = T.GO_ID
-        INNER JOIN GO.DEFINITIONS@GOAPRO D 
-          ON T.GO_ID = D.GO_ID        
+        INNER JOIN GO.DEFINITIONS@GOAPRO D
+          ON T.GO_ID = D.GO_ID
         """
     ):
         term_constraints = set()
@@ -193,7 +193,7 @@ def load_terms(dsn, schema):
         if len(rows) == BULK_INSERT_SIZE:
             con.executemany(
                 """
-                INSERT /*+APPEND*/ INTO {}.TERM
+                INSERT /*+ APPEND */ INTO {}.TERM
                 VALUES (:1, :2, :3, :4, :5, :6, :7)
                 """.format(schema),
                 rows
@@ -204,7 +204,7 @@ def load_terms(dsn, schema):
     if rows:
         con.executemany(
             """
-            INSERT /*+APPEND*/ INTO {}.TERM
+            INSERT /*+ APPEND */ INTO {}.TERM
             VALUES (:1, :2, :3, :4, :5, :6, :7)
             """.format(schema),
             rows

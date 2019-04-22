@@ -1,18 +1,24 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-__version__ = "0.5.3"
+__version__ = "0.5.4"
 
 import logging
 
 
-def get_logger(name: str="prontload") -> logging.Logger:
+def get_logger(name: str="prontload",
+               level: int=logging.INFO) -> logging.Logger:
+
     logger = logging.getLogger(name)
     if not logger.handlers:
         ch = logging.StreamHandler()
         ch.setFormatter(logging.Formatter(fmt="%(asctime)s: %(message)s",
                                           datefmt="%Y-%m-%d %H:%M:%S"))
         logger.addHandler(ch)
+        logger.setLevel(level)
+    elif logger.level != level:
+        logger.setLevel(level)
+
     return logger
 
 
@@ -34,7 +40,7 @@ def cli():
     from tempfile import gettempdir
     from threading import Thread
 
-    from . import goa, interpro, uniprot
+    from . import goa, interpro, oracledb, uniprot
 
     default_report = "swissprot_report_{}.tsv".format(
         datetime.today().strftime("%Y_%m_%d")
@@ -66,7 +72,7 @@ def cli():
     args = parser.parse_args()
 
     os.makedirs(args.tmpdir, exist_ok=True)
-    get_logger().setLevel(args.verbose)
+    get_logger(level=args.verbose)
 
     with open(args.config, "rt") as fh:
         config = json.load(fh)
@@ -78,7 +84,7 @@ def cli():
     steps = {
         # In priority, if called
         "clear": {
-            "func": interpro.clear_schema,
+            "func": oracledb.clear_schema,
             "args": (dsn, schema),
             "skip": True
         },

@@ -101,14 +101,14 @@ def load_comments(dsn, schema):
     ]
 
     query = """
-        INSERT /*+APPEND*/ INTO {}.CV_COMMENT_TOPIC (TOPIC_ID, TOPIC)
+        INSERT /*+ APPEND */ INTO {}.CV_COMMENT_TOPIC
         VALUES (:1, :2)
     """.format(schema)
     con.executemany(query, topics)
     con.commit()
 
     query = """
-        INSERT /*+APPEND*/ INTO {}.COMMENT_VALUE (TOPIC_ID, COMMENT_ID, TEXT)
+        INSERT /*+ APPEND */ INTO {}.COMMENT_VALUE
         VALUES (:1, :2, :3)
     """.format(schema)
     for i in range(0, len(comments), BULK_INSERT_SIZE):
@@ -116,9 +116,7 @@ def load_comments(dsn, schema):
         con.commit()
 
     query = """
-        INSERT /*+APPEND*/ INTO {}.PROTEIN_COMMENT (
-            PROTEIN_AC, TOPIC_ID, COMMENT_ID
-        )
+        INSERT /*+ APPEND */ INTO {}.PROTEIN_COMMENT
         VALUES (:1, :2, :3)
     """.format(schema)
     for i in range(0, len(protein2comment), BULK_INSERT_SIZE):
@@ -212,7 +210,7 @@ def load_descriptions(dsn, schema, tmpdir=None):
             if len(rel_table) >= BULK_INSERT_SIZE:
                 con.executemany(
                     """
-                    INSERT /*+ APPEND */ INTO {}.DESC_VALUE (DESC_ID, TEXT)
+                    INSERT /*+ APPEND */ INTO {}.DESC_VALUE
                     VALUES (:1, :2)
                     """.format(schema),
                     cv_table
@@ -223,9 +221,7 @@ def load_descriptions(dsn, schema, tmpdir=None):
                 for i in range(0, len(rel_table), BULK_INSERT_SIZE):
                     con.executemany(
                         """
-                        INSERT /*+ APPEND */ INTO {}.PROTEIN_DESC (
-                            PROTEIN_AC, DESC_ID
-                        )
+                        INSERT /*+ APPEND */ INTO {}.PROTEIN_DESC
                         VALUES (:1, :2)
                         """.format(schema),
                         rel_table[i:i+BULK_INSERT_SIZE]
@@ -246,7 +242,7 @@ def load_descriptions(dsn, schema, tmpdir=None):
     if cv_table:
         con.executemany(
             """
-            INSERT /*+ APPEND */ INTO {}.DESC_VALUE (DESC_ID, TEXT)
+            INSERT /*+ APPEND */ INTO {}.DESC_VALUE
             VALUES (:1, :2)
             """.format(schema),
             cv_table
@@ -256,9 +252,7 @@ def load_descriptions(dsn, schema, tmpdir=None):
     for i in range(0, len(rel_table), BULK_INSERT_SIZE):
         con.executemany(
             """
-            INSERT /*+ APPEND */ INTO {}.PROTEIN_DESC (
-                PROTEIN_AC, DESC_ID
-            )
+            INSERT /*+ APPEND */ INTO {}.PROTEIN_DESC
             VALUES (:1, :2)
             """.format(schema),
             rel_table[i:i+BULK_INSERT_SIZE]

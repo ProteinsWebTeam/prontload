@@ -3,43 +3,45 @@ from multiprocessing import Process, Queue
 from threading import Thread
 
 from .. import get_logger
-from ..oracledb import Connection, BULK_INSERT_SIZE
+from ..oracledb import BULK_INSERT_SIZE, Connection, copy_tables
 
 from .utils import enable_schema, get_entry_key
 
 logger = get_logger()
 
 
-def clear_schema(dsn, schema):
-    con = Connection(dsn)
-    for table in con.get_tables(schema):
-        con.drop_table(schema, table)
-
-
 def copy_schema(dsn, schema):
     con = Connection(dsn)
+    enable_schema(con, schema)
+    con.close()
 
+    if copy_tables(dsn, schema, "INTERPRO_ANALYSIS"):
+        con = Connection(dsn)
+        enable_schema(con, "INTERPRO_ANALYSIS")
+        con.close()
+    else:
+        raise RuntimeError("schema copy failed")
+
+    return
     logger.debug("copy                exporting")
     proc = "{}.copy_interpro_analysis.exp_interpro_analysis".format(schema)
     con.exec(proc)
-    enable_schema(con, schema)
 
     logger.debug("copy                importing")
     con.exec("interpro_analysis.drop_all")
     to_drop = []
     for row in con.get(
-            """
-            SELECT OWNER_NAME, JOB_NAME
-            FROM DBA_DATAPUMP_JOBS
-            WHERE STATE = 'NOT RUNNING'
-            AND ATTACHED_SESSIONS = 0
-            """
+        """
+        SELECT JOB_NAME
+        FROM USER_DATAPUMP_JOBS
+        WHERE STATE = 'NOT RUNNING'
+        AND ATTACHED_SESSIONS = 0
+        """
     ):
-        to_drop.append(row)
+        to_drop.append(row[0])
 
-    for owner, table in to_drop:
-        if owner == schema:
-            con.drop_table(schema, table)
+    for table in to_drop:
+        con.drop_table(schema, table)
 
     proc = "{}.copy_interpro_analysis.imp_interpro_analysis_load".format(schema)
     con.exec(proc)
@@ -56,10 +58,10 @@ def report_description_changes(dsn, schema, output):
     """
     query = """
         SELECT DISTINCT EM.ENTRY_AC, M.DESCRIPTION
-        FROM {0}.METHOD2SWISS_DE M
-        INNER JOIN {0}.ENTRY2METHOD EM
+        FROM INTERPRO.METHOD2SWISS_DE M
+        INNER JOIN INTERPRO.ENTRY2METHOD EM
         ON M.METHOD_AC = EM.METHOD_AC
-    """.format(schema)
+    """
     old_entries = {}
     for acc, text in con.get(query):
         if acc in old_entries:
@@ -165,7 +167,7 @@ def load_databases(dsn, schema):
 
     con.execute(
         """
-        INSERT /*+APPEND*/ INTO {}.CV_DATABASE (
+        INSERT /*+ APPEND */ INTO {}.CV_DATABASE (
             DBCODE, DBNAME, DBSHORT, VERSION, FILE_DATE
         )
         SELECT DB.DBCODE, DB.DBNAME, DB.DBSHORT, V.VERSION, V.FILE_DATE
@@ -208,7 +210,7 @@ def load_matches(dsn, schema):
     logger.debug("matches             inserting protein/feature matches")
     con.execute(
         """
-        INSERT /*+APPEND*/ INTO {}.MATCH
+        INSERT /*+ APPEND */ INTO {}.MATCH
         SELECT
           PROTEIN_AC, METHOD_AC, DBCODE,
           CASE
@@ -296,7 +298,7 @@ def load_proteins(dsn, schema):
 
     con.execute(
         """
-        INSERT /*+APPEND*/ INTO {}.PROTEIN (
+        INSERT /*+ APPEND */ INTO {}.PROTEIN (
             PROTEIN_AC, NAME, DBCODE, LEN, FRAGMENT, TAX_ID
         )
         SELECT
@@ -351,7 +353,7 @@ def load_signatures(dsn, schema):
 
     con.execute(
         """
-        INSERT /*+APPEND*/ INTO {}.METHOD (
+        INSERT /*+ APPEND */ INTO {}.METHOD (
             METHOD_AC, NAME, DBCODE, CANDIDATE,
             DESCRIPTION, SIG_TYPE, ABSTRACT, ABSTRACT_LONG
         )
@@ -412,7 +414,7 @@ def load_taxa(dsn, schema):
 
     con.execute(
         """
-        INSERT /*+APPEND*/ INTO {}.ETAXI (
+        INSERT /*+ APPEND */ INTO {}.ETAXI (
             TAX_ID, PARENT_ID, SCIENTIFIC_NAME, RANK,
             LEFT_NUMBER, RIGHT_NUMBER, FULL_NAME
         )
@@ -478,7 +480,7 @@ def load_taxa(dsn, schema):
     for i in range(0, len(lineage), BULK_INSERT_SIZE):
         con.executemany(
             """
-            INSERT /*+APPEND*/ INTO {}.LINEAGE (LEFT_NUMBER, TAX_ID, RANK)
+            INSERT /*+ APPEND */ INTO {}.LINEAGE (LEFT_NUMBER, TAX_ID, RANK)
             VALUES (:1, :2, :3)
             """.format(schema),
             lineage[i:i+BULK_INSERT_SIZE]
@@ -522,6 +524,10 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
             LEN NUMBER(5) NOT NULL,
             LEFT_NUMBER NUMBER NOT NULL,
             DESC_ID NUMBER(10) NOT NULL
+        )
+        PARTITION BY LIST (DBCODE) (
+          PARTITION M2P_SWISSP VALUES ('S'),
+          PARTITION M2P_TREMBL VALUES ('T')
         ) NOLOGGING
         """.format(schema)
     )
@@ -675,18 +681,18 @@ def load_method2protein(dsn: str, schema: str, chunk_size: int=10000,
     residue_coverages = residue_overlaps = None
 
     # Create table (MV-like) for only SwissProt proteins
-    utils.create_method2swissprot(dsn, schema)
+    # utils.create_method2swissprot(dsn, schema)
 
     t1 = Thread(target=utils.optimise_method2protein, args=(dsn, schema))
-    t2 = Thread(target=utils.optimise_method2swissprot, args=(dsn, schema))
+    # t2 = Thread(target=utils.optimise_method2swissprot, args=(dsn, schema))
     p1 = Process(target=utils.load_description_counts,
                  args=(dsn, schema, names))
     p2 = Process(target=utils.load_taxonomy_counts, args=(dsn, schema, taxa))
 
-    for x in (t1, t2, p1, p2):
+    for x in (t1, p1, p2):
         x.start()
 
-    for x in (t1, t2, p1, p2):
+    for x in (t1, p1, p2):
         x.join()
 
     for o in names:
