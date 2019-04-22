@@ -66,7 +66,7 @@ class Connection(object):
 
     def get_tables(self, ownname):
         query = """
-            SELECT TABLE_NAME 
+            SELECT TABLE_NAME
             FROM ALL_TABLES
             WHERE UPPER(OWNER) = UPPER(:1)
             ORDER BY TABLE_NAME
@@ -75,17 +75,17 @@ class Connection(object):
 
     def get_indexes(self, ownname):
         query = """
-            SELECT 
-              I.INDEX_NAME, I.TABLESPACE_NAME, I.UNIQUENESS, I.TABLE_NAME, 
+            SELECT
+              I.INDEX_NAME, I.TABLESPACE_NAME, I.UNIQUENESS, I.TABLE_NAME,
               I.LOGGING, IC.COLUMN_NAME, IC.DESCEND
             FROM ALL_INDEXES I
-            INNER JOIN ALL_IND_COLUMNS IC 
-              ON I.OWNER = IC.INDEX_OWNER 
-              AND I.INDEX_NAME = IC.INDEX_NAME 
+            INNER JOIN ALL_IND_COLUMNS IC
+              ON I.OWNER = IC.INDEX_OWNER
+              AND I.INDEX_NAME = IC.INDEX_NAME
               AND I.TABLE_NAME = IC.TABLE_NAME
             WHERE UPPER(I.OWNER) = UPPER(:1)
             ORDER BY I.INDEX_NAME, IC.COLUMN_POSITION
-        
+
         """
         indexes = {}
         for row in self.get(query, ownname):
@@ -111,13 +111,13 @@ class Connection(object):
 
     def get_constraints(self, ownname):
         query = """
-            SELECT 
+            SELECT
               C.CONSTRAINT_NAME, C.CONSTRAINT_TYPE, C.TABLE_NAME,
               C.R_CONSTRAINT_NAME, CC.COLUMN_NAME
             FROM ALL_CONSTRAINTS C
-            INNER JOIN ALL_CONS_COLUMNS CC 
-              ON C.OWNER = CC.OWNER 
-              AND C.CONSTRAINT_NAME = CC.CONSTRAINT_NAME 
+            INNER JOIN ALL_CONS_COLUMNS CC
+              ON C.OWNER = CC.OWNER
+              AND C.CONSTRAINT_NAME = CC.CONSTRAINT_NAME
               AND C.TABLE_NAME = CC.TABLE_NAME
             WHERE UPPER(C.OWNER) = UPPER(:1)
             ORDER BY C.CONSTRAINT_NAME, CC.POSITION
@@ -153,8 +153,8 @@ class Connection(object):
 
     def get_grants(self, owname):
         query = """
-            SELECT TABLE_NAME, PRIVILEGE, GRANTEE 
-            FROM ALL_TAB_PRIVS 
+            SELECT TABLE_NAME, PRIVILEGE, GRANTEE
+            FROM ALL_TAB_PRIVS
             WHERE TABLE_SCHEMA = :1
         """
 
@@ -174,11 +174,11 @@ class Connection(object):
 
     def get_partitions(self, owname):
         query = """
-            SELECT 
-              PKC.NAME, PKC.COLUMN_NAME, PKC.COLUMN_POSITION, TP.PARTITION_NAME, 
+            SELECT
+              PKC.NAME, PKC.COLUMN_NAME, PKC.COLUMN_POSITION, TP.PARTITION_NAME,
               TP.HIGH_VALUE
             FROM ALL_TAB_PARTITIONS TP
-              INNER JOIN ALL_PART_KEY_COLUMNS PKC 
+              INNER JOIN ALL_PART_KEY_COLUMNS PKC
               ON TP.TABLE_OWNER = PKC.OWNER AND TP.TABLE_NAME = PKC.NAME
             WHERE TP.TABLE_OWNER = :1
             ORDER BY TP.PARTITION_POSITION
@@ -339,7 +339,7 @@ def copy_tables(dsn, schema_src, schema_dst):
             else:
                 logger.info("{} done".format(table))
 
-    return num_errors > 0
+    return num_errors == 0
 
 
 def rebuild_table(dsn, name, src, dst, constraints, indexes, grants, partition):
