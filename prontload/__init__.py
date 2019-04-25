@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-__version__ = "0.5.4"
+__version__ = "0.5.5"
 
 import logging
 
@@ -77,8 +77,13 @@ def cli():
     with open(args.config, "rt") as fh:
         config = json.load(fh)
 
-    dsn = config["dsn"]
-    schema = config["schema"]
+    users = config["users"]
+    dsn = users["main"] + '@' + config["dsn"]
+    schema = users["main"].split('/')[0]
+
+    dsn_dst = users["secondary"] + '@' + config["dsn"]
+    schema_dst = users["secondary"].split('/')[0]
+
     max_gap = int(config["max_gap"])
 
     steps = {
@@ -160,7 +165,7 @@ def cli():
 
         "copy": {
             "func": interpro.copy_schema,
-            "args": (dsn, schema)
+            "args": (dsn, schema, dsn_dst, schema_dst)
         }
     }
 

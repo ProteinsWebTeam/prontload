@@ -10,14 +10,14 @@ from .utils import enable_schema, get_entry_key
 logger = get_logger()
 
 
-def copy_schema(dsn, schema):
-    con = Connection(dsn)
-    enable_schema(con, schema)
+def copy_schema(dsn_src, schema_src, dsn_dst, schema_dst):
+    con = Connection(dsn_src)
+    enable_schema(con, schema_src)
     con.close()
 
-    if copy_tables(dsn, schema, "INTERPRO_ANALYSIS"):
-        con = Connection(dsn)
-        enable_schema(con, "INTERPRO_ANALYSIS")
+    if copy_tables(dsn_dst, schema_src, schema_dst):
+        con = Connection(dsn_dst)
+        enable_schema(con, schema_dst)
         con.close()
     else:
         raise RuntimeError("schema copy failed")

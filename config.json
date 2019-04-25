@@ -1,5 +1,8 @@
 {
   "dsn": "",
-  "schema": "",
+  "users": {
+    "main": "",
+    "secondary": ""
+  },
   "max_gap": 20
 }
