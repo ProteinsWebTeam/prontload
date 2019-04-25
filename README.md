@@ -16,8 +16,10 @@ $ python setup.py install
 
 Create or edit the `config.json` file to set the following settings:
 
-* `dsn`: Oracle DSN in the `user/password@host:port/service` format.
-* `schema`: Oracle schema where to create/refresh tables. Be sure that the user defined in `dsn` has the right priviles (e.g. `CREATE TABLE`, `DROP ANY TABLE`, etc.).
+* `dsn`: Oracle DSN in the `host:port/service` format.
+* `users`: 
+  * `main`: owner of the main schema (where tables will be created) in the `username/password` format.
+  * `secondary`: owner of the secondary schema (where tables will be copied from the main schema when it's ready) in the `username/password` format.
 * `max_gap`: Used to group proteins by their match structure. Historically set to `20`.
 
 ## Database links
