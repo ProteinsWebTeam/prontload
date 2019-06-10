@@ -16,8 +16,6 @@ def get_logger(name: str="prontload",
                                           datefmt="%Y-%m-%d %H:%M:%S"))
         logger.addHandler(ch)
         logger.setLevel(level)
-    elif logger.level != level:
-        logger.setLevel(level)
 
     return logger
 
