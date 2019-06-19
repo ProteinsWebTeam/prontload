@@ -40,8 +40,6 @@ def cli():
     from tempfile import gettempdir
     from threading import Thread
 
-    from . import goa, interpro, oracledb, uniprot
-
     default_report = "swissprot_report_{}.tsv".format(
         datetime.today().strftime("%Y_%m_%d")
     )
@@ -73,6 +71,8 @@ def cli():
 
     os.makedirs(args.tmpdir, exist_ok=True)
     get_logger(level=args.verbose)
+
+    from . import goa, interpro, oracledb, uniprot
 
     with open(args.config, "rt") as fh:
         config = json.load(fh)
