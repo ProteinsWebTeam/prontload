@@ -34,7 +34,6 @@ class ProteinConsumer(Process):
                 """.format(self.schema)
         ):
             signature_info[acc] = (dbcode, s_type)
-            accessions.append(acc)
             if cnt == bucket_size:
                 accessions.append(acc)
                 cnt = 1
