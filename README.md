@@ -1,5 +1,7 @@
 # prontload
 
+:warning: As of August 2019 we do not use this repository for the Protein Update. Please use [pyinterprod](https://github.com/ProteinsWebTeam/pyinterprod).
+
 Refresh [Pronto](https://github.com/ProteinsWebTeam/pronto/) with the latest data from InterPro, GOA, and UniProt.
 
 ## Installation
